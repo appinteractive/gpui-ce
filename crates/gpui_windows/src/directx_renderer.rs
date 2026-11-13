@@ -622,6 +622,7 @@ impl DirectXRenderer {
                                 filter.corner_smoothing,
                                 filter.max_blur_radius(),
                                 filter.opacity,
+                                filter.color_adjustment(),
                                 true,
                             )?;
                         }
@@ -670,6 +671,7 @@ impl DirectXRenderer {
                         boundary.corner_smoothing,
                         boundary.max_blur_radius(),
                         boundary.opacity,
+                        boundary.color_adjustment(),
                         false,
                     );
                     self.active_render_target = parent_rtv.clone();
@@ -1243,6 +1245,8 @@ impl DirectXRenderer {
         corner_smoothing: f32,
         blur_radius: f32,
         opacity: f32,
+        // Combined (saturation, brightness) of the filter chain; (1.0, 1.0) is the identity.
+        (saturation, brightness): (f32, f32),
         // Backdrop clips to the rounded rect; content (`filter`) bleeds past its bounds.
         clip_rounded: bool,
     ) -> Result<()> {
@@ -1330,6 +1334,8 @@ impl DirectXRenderer {
             corner_radii,
             corner_smoothing,
             opacity,
+            saturation,
+            brightness,
             clip,
             source_size,
             full_size,
@@ -1401,6 +1407,7 @@ impl DirectXRenderer {
                 0.0,
                 0.0,
                 1.0,
+                (1.0, 1.0),
                 false,
             )?;
         }

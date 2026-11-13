@@ -38,6 +38,10 @@ pub struct FilterCompositeParameters {
     pub corner_smoothing: f32,
     pub blur_radius: f32,
     pub opacity: f32,
+    /// Combined saturation of the filter chain; 1.0 is the identity.
+    pub saturation: f32,
+    /// Combined brightness of the filter chain; 1.0 is the identity.
+    pub brightness: f32,
     pub clip: FilterCompositeClip,
 }
 
@@ -102,6 +106,8 @@ impl BlurUniforms {
         corner_radii: Corners<ScaledPixels>,
         corner_smoothing: f32,
         opacity: f32,
+        saturation: f32,
+        brightness: f32,
         clip: FilterCompositeClip,
         source_size: [f32; 2],
         target_size: [f32; 2],
@@ -112,6 +118,8 @@ impl BlurUniforms {
             corner_radii: corner_radii.into(),
             corner_smoothing,
             opacity,
+            saturation,
+            brightness,
             composite_clip: match clip {
                 FilterCompositeClip::RoundedBounds => ShaderBlurCompositeClip::RoundedBounds,
                 FilterCompositeClip::ContentShape => ShaderBlurCompositeClip::None,
@@ -226,9 +234,9 @@ fn empty_uniforms(downsample_mode: DownsampleMode) -> BlurUniforms {
         source_size: vec2f(1.0, 1.0),
         target_size: vec2f(1.0, 1.0),
         corner_smoothing: 0.0,
+        saturation: 1.0,
+        brightness: 1.0,
         padding0: 0,
-        padding1: 0,
-        padding2: 0,
     }
 }
 

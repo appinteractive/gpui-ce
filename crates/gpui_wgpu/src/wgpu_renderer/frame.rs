@@ -430,6 +430,7 @@ impl<'a> FrameEncoder<'a> {
                             )
                         });
                         let source = snapshot.as_ref().unwrap_or_else(|| self.targets.current());
+                        let (saturation, brightness) = filter.color_adjustment();
                         self.renderer.blur_and_composite(
                             &mut self.encoder,
                             source,
@@ -441,6 +442,8 @@ impl<'a> FrameEncoder<'a> {
                                 corner_smoothing: filter.corner_smoothing,
                                 blur_radius: filter.max_blur_radius(),
                                 opacity: filter.opacity,
+                                saturation,
+                                brightness,
                                 clip: FilterCompositeClip::RoundedBounds,
                             },
                         );
@@ -492,6 +495,7 @@ impl<'a> FrameEncoder<'a> {
                     drop(pass);
                     let (filtered, parent) = self.targets.exit();
                     let boundary = &self.scene.filter_boundaries[*boundary_index];
+                    let (saturation, brightness) = boundary.color_adjustment();
                     self.renderer.blur_and_composite(
                         &mut self.encoder,
                         &filtered,
@@ -503,6 +507,8 @@ impl<'a> FrameEncoder<'a> {
                             corner_smoothing: boundary.corner_smoothing,
                             blur_radius: boundary.max_blur_radius(),
                             opacity: boundary.opacity,
+                            saturation,
+                            brightness,
                             clip: FilterCompositeClip::ContentShape,
                         },
                     );

@@ -228,9 +228,9 @@ pub const RENDER_BUFFER_LAYOUTS: &[gpui::SceneBufferLayout] = &[
         source_size,
         target_size,
         corner_smoothing,
-        padding0,
-        padding1,
-        padding2
+        saturation,
+        brightness,
+        padding0
     ),
     render_layout!(crate::path_types::PathSprite, "PathSprite", bounds),
     render_layout!(

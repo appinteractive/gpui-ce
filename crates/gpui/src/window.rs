@@ -4569,7 +4569,8 @@ impl Window {
     /// background quad on top so its color tints the blurred backdrop.
     /// `corner_smoothing` ranges from circular corners at `0.0` to maximum smoothing at `1.0`.
     ///
-    /// Does nothing when `filters` produce no visible blur.
+    /// Does nothing when `filters` produce no visible blur: colour stages such as saturation and
+    /// brightness only take effect together with a blur.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn paint_backdrop_filter(
@@ -4587,7 +4588,12 @@ impl Window {
             .filter(|filter| !filter.is_identity())
             .map(|filter| filter.scale(scale_factor))
             .collect();
-        if filters.is_empty() {
+        // Identity blurs are already filtered out, so any remaining blur is visible. Without one
+        // the renderer would drop the primitive after doing GPU work for it.
+        if !filters
+            .iter()
+            .any(|filter| matches!(filter, ScaledFilter::Blur(_)))
+        {
             return;
         }
 
@@ -4608,8 +4614,9 @@ impl Window {
     /// `corner_radii` — the CSS `filter` effect (e.g. blurring an element and its children).
     /// `corner_smoothing` ranges from circular corners at `0.0` to maximum smoothing at `1.0`.
     ///
-    /// When `filters` produce no visible blur this simply runs `f` with no offscreen
-    /// indirection.
+    /// When every filter in `filters` is an identity (no blur, and saturation and brightness at
+    /// 1.0) this simply runs `f` with no offscreen indirection. Colour stages without a blur still
+    /// isolate and composite the layer.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn with_filter_layer<R>(
@@ -8621,6 +8628,63 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+
+    struct ColorStageFilterView {
+        colour_only_backdrop: bool,
+    }
+
+    impl Render for ColorStageFilterView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let backdrop = if self.colour_only_backdrop {
+                div().size(px(20.)).backdrop_saturate(0.0)
+            } else {
+                div()
+                    .size(px(20.))
+                    .backdrop_blur(px(4.))
+                    .backdrop_saturate(0.5)
+            };
+            div()
+                .size(px(80.))
+                .child(backdrop)
+                .child(div().size(px(20.)).filter(vec![Filter::Saturate(0.0)]))
+        }
+    }
+
+    #[gpui::test]
+    fn colour_stages_need_a_blur_in_backdrop_chains_only(cx: &mut TestAppContext) {
+        for (colour_only_backdrop, expected_backdrops) in [(true, 0), (false, 1)] {
+            let window = cx.add_window(move |_, _| ColorStageFilterView {
+                colour_only_backdrop,
+            });
+            window
+                .update(cx, |_, window, _| {
+                    let scene = &window.rendered_frame.scene;
+                    assert_eq!(
+                        scene.backdrop_filters.len(),
+                        expected_backdrops,
+                        "colour-only backdrop chain: {colour_only_backdrop}"
+                    );
+                    if let Some(backdrop) = scene.backdrop_filters.first() {
+                        assert_eq!(backdrop.color_adjustment(), (0.5, 1.0));
+                    }
+                    let content_filters = scene
+                        .filter_boundaries
+                        .iter()
+                        .filter(|boundary| !boundary.filters.is_empty())
+                        .collect::<Vec<_>>();
+                    assert!(
+                        !content_filters.is_empty(),
+                        "a colour-only content filter must still be isolated"
+                    );
+                    assert!(
+                        content_filters
+                            .iter()
+                            .all(|boundary| boundary.color_adjustment() == (0.0, 1.0))
+                    );
+                })
+                .unwrap();
+        }
     }
 
     struct OpensWindowOnPaint {

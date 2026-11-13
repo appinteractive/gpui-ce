@@ -5,9 +5,10 @@
 
 use gpui::{
     AtlasKey, AtlasTile, BackdropFilter, BorderStyle, Bounds, ColorSpace, ContentMask, Corners,
-    DevicePixels, Edges, Hsla, MonochromeSprite, PlatformHeadlessRenderer, Point, PolychromeSprite,
-    Quad, RenderImageParams, RenderSvgParams, ScaledFilter, ScaledPixels, Scene, ShaderBool,
-    Shadow, Size, Underline, checkerboard, linear_color_stop, linear_gradient, solid_background,
+    DevicePixels, Edges, FilterBoundary, Hsla, MonochromeSprite, PlatformHeadlessRenderer, Point,
+    PolychromeSprite, Quad, RenderImageParams, RenderSvgParams, ScaledFilter, ScaledPixels, Scene,
+    ShaderBool, Shadow, Size, Underline, checkerboard, linear_color_stop, linear_gradient,
+    solid_background,
 };
 use gpui_ce_wgpu::WgpuHeadlessRenderer;
 use smallvec::smallvec;
@@ -579,4 +580,196 @@ fn content_mask_fades_quad_edges() {
     close(60, 2, 64);
     // The unfaded right edge still clips hard at the mask boundary.
     assert_eq!(pixel(101, 50)[0], 0);
+}
+
+/// Renders a solid opaque quad of `color` across the whole target, then a backdrop filter over
+/// the middle with the given chain, and returns the pixel at the centre of the filtered area.
+fn backdrop_chain_pixel(color: u32, filters: &[ScaledFilter]) -> [u8; 4] {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let mut scene = Scene::default();
+    let fill: Hsla = gpui::rgb_to_hsla(gpui::rgb(color));
+    scene.insert_primitive(Quad {
+        bounds: bounds(0.0, 0.0, 310.0, 100.0),
+        content_mask: full_mask(),
+        background: solid_background(fill),
+        ..Default::default()
+    });
+    scene.insert_primitive(BackdropFilter {
+        order: 0,
+        bounds: bounds(50.0, 20.0, 200.0, 60.0),
+        content_mask: full_mask(),
+        corner_radii: Corners::default(),
+        corner_smoothing: 0.0,
+        filters: filters.iter().copied().collect(),
+        opacity: 1.0,
+    });
+    scene.finish();
+    let image = renderer
+        .render_scene_to_image(&scene, TARGET)
+        .expect("render must succeed");
+    image.get_pixel(150, 50).0
+}
+
+#[test]
+fn backdrop_saturate_zero_gives_the_luma_grey() {
+    let pixel = backdrop_chain_pixel(
+        0xc83c3c,
+        &[
+            ScaledFilter::Blur(ScaledPixels(2.0)),
+            ScaledFilter::Saturate(0.0),
+        ],
+    );
+    let luma = 0.2126 * 200.0 + 0.7152 * 60.0 + 0.0722 * 60.0;
+    let channels = [pixel[0], pixel[1], pixel[2]];
+    let spread = channels.iter().max().unwrap() - channels.iter().min().unwrap();
+    assert!(spread <= 2, "channels must match: {pixel:?}");
+    assert!(
+        (f32::from(pixel[1]) - luma).abs() <= 3.0,
+        "grey must be the luma {luma}: {pixel:?}"
+    );
+}
+
+#[test]
+fn backdrop_saturate_widens_the_channel_spread() {
+    let blur = ScaledFilter::Blur(ScaledPixels(2.0));
+    let base = backdrop_chain_pixel(0x965a5a, &[blur]);
+    let boosted = backdrop_chain_pixel(0x965a5a, &[blur, ScaledFilter::Saturate(1.8)]);
+    let base_spread = f32::from(base[0]) - f32::from(base[1]);
+    let boosted_spread = f32::from(boosted[0]) - f32::from(boosted[1]);
+    let ratio = boosted_spread / base_spread;
+    assert!(
+        (ratio - 1.8).abs() < 0.08,
+        "spread ratio {ratio}: base {base:?}, boosted {boosted:?}"
+    );
+}
+
+#[test]
+fn backdrop_brightness_scales_each_channel() {
+    let pixel = backdrop_chain_pixel(
+        0xc83c3c,
+        &[
+            ScaledFilter::Blur(ScaledPixels(2.0)),
+            ScaledFilter::Brightness(0.7),
+        ],
+    );
+    for (channel, original) in [(0, 200.0_f32), (1, 60.0), (2, 60.0)] {
+        let expected = original * 0.7;
+        assert!(
+            (f32::from(pixel[channel]) - expected).abs() <= 2.0,
+            "channel {channel}: got {}, expected {expected}",
+            pixel[channel]
+        );
+    }
+}
+
+#[test]
+fn backdrop_color_stages_at_one_match_blur_alone() {
+    let render = |filters: &[ScaledFilter]| {
+        let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+        let mut scene = Scene::default();
+        let warm: Hsla = gpui::rgb_to_hsla(gpui::rgb(0xc83c3c));
+        let cool: Hsla = gpui::rgb_to_hsla(gpui::rgb(0x1e78dc));
+        for stripe in 0..52 {
+            scene.insert_primitive(Quad {
+                bounds: bounds(stripe as f32 * 6.0, 0.0, 6.0, 100.0),
+                content_mask: full_mask(),
+                background: solid_background(if stripe % 2 == 0 { warm } else { cool }),
+                ..Default::default()
+            });
+        }
+        scene.insert_primitive(BackdropFilter {
+            order: 0,
+            bounds: bounds(50.0, 20.0, 200.0, 60.0),
+            content_mask: full_mask(),
+            corner_radii: Corners::all(ScaledPixels(10.0)),
+            corner_smoothing: 0.0,
+            filters: filters.iter().copied().collect(),
+            opacity: 1.0,
+        });
+        scene.finish();
+        renderer
+            .render_scene_to_image(&scene, TARGET)
+            .expect("render must succeed")
+    };
+    let blur = ScaledFilter::Blur(ScaledPixels(3.0));
+    let alone = render(&[blur]);
+    let chained = render(&[
+        blur,
+        ScaledFilter::Saturate(1.0),
+        ScaledFilter::Brightness(1.0),
+    ]);
+    assert_eq!(alone.as_raw(), chained.as_raw());
+}
+
+/// Renders a solid quad inside a content-filter group with the given chain and returns the pixel
+/// at the centre of the group.
+fn content_chain_pixel(color: u32, filters: &[ScaledFilter]) -> [u8; 4] {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let mut scene = Scene::default();
+    let start = FilterBoundary {
+        order: 0,
+        bounds: bounds(50.0, 20.0, 200.0, 60.0),
+        content_mask: full_mask(),
+        corner_radii: Corners::default(),
+        corner_smoothing: 0.0,
+        filters: filters.iter().copied().collect(),
+        opacity: 1.0,
+        is_start: true,
+    };
+    scene.insert_primitive(start.clone());
+    scene.insert_primitive(Quad {
+        bounds: bounds(50.0, 20.0, 200.0, 60.0),
+        content_mask: full_mask(),
+        background: solid_background(gpui::rgb_to_hsla(gpui::rgb(color))),
+        ..Default::default()
+    });
+    scene.insert_primitive(FilterBoundary {
+        is_start: false,
+        ..start
+    });
+    scene.finish();
+    let image = renderer
+        .render_scene_to_image(&scene, TARGET)
+        .expect("render must succeed");
+    image.get_pixel(150, 50).0
+}
+
+#[test]
+fn content_filter_saturate_works_without_blur() {
+    let luma = 0.2126 * 200.0 + 0.7152 * 60.0 + 0.0722 * 60.0;
+    let unfiltered = content_chain_pixel(0xc83c3c, &[ScaledFilter::Saturate(1.0)]);
+    assert_eq!(
+        [unfiltered[0], unfiltered[1], unfiltered[2]],
+        [200, 60, 60],
+        "a saturate(1) chain must leave the colour alone: {unfiltered:?}"
+    );
+    let pixel = content_chain_pixel(0xc83c3c, &[ScaledFilter::Saturate(0.0)]);
+    let channels = [pixel[0], pixel[1], pixel[2]];
+    let spread = channels.iter().max().unwrap() - channels.iter().min().unwrap();
+    assert!(spread <= 2, "channels must match: {pixel:?}");
+    assert!(
+        (f32::from(pixel[1]) - luma).abs() <= 3.0,
+        "grey must be the luma {luma}: {pixel:?}"
+    );
+    assert_eq!(pixel[3], 255, "the group stays opaque: {pixel:?}");
+}
+
+#[test]
+fn content_filter_saturate_works_with_blur() {
+    let luma = 0.2126 * 200.0 + 0.7152 * 60.0 + 0.0722 * 60.0;
+    let pixel = content_chain_pixel(
+        0xc83c3c,
+        &[
+            ScaledFilter::Blur(ScaledPixels(2.0)),
+            ScaledFilter::Saturate(0.0),
+        ],
+    );
+    let channels = [pixel[0], pixel[1], pixel[2]];
+    let spread = channels.iter().max().unwrap() - channels.iter().min().unwrap();
+    assert!(spread <= 2, "channels must match: {pixel:?}");
+    assert!(
+        (f32::from(pixel[1]) - luma).abs() <= 3.0,
+        "grey must be the luma {luma}: {pixel:?}"
+    );
+    assert_eq!(pixel[3], 255, "the group stays opaque: {pixel:?}");
 }

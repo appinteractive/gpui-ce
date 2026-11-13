@@ -108,6 +108,34 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Change the saturation of the content rendered behind this element, like CSS
+    /// `backdrop-filter: saturate(<factor>)`. 1.0 is the identity, 0.0 is greyscale.
+    ///
+    /// *Appends* to the element's backdrop-filter chain. The colour stage takes effect in a
+    /// chain that also has a non-zero [`Styled::backdrop_blur`]; a backdrop chain without blur
+    /// is dropped.
+    fn backdrop_saturate(mut self, factor: f32) -> Self {
+        self.style()
+            .backdrop_filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Saturate(factor));
+        self
+    }
+
+    /// Change the brightness of the content rendered behind this element, like CSS
+    /// `backdrop-filter: brightness(<factor>)`. 1.0 is the identity, 0.0 is black.
+    ///
+    /// *Appends* to the element's backdrop-filter chain. The colour stage takes effect in a
+    /// chain that also has a non-zero [`Styled::backdrop_blur`]; a backdrop chain without blur
+    /// is dropped.
+    fn backdrop_brightness(mut self, factor: f32) -> Self {
+        self.style()
+            .backdrop_filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Brightness(factor));
+        self
+    }
+
     /// Set (replacing any existing) the full list of filters applied to the content behind this
     /// element, like CSS `backdrop-filter`. To add a single filter to the chain instead, use the
     /// convenience setters such as [`Styled::backdrop_blur`].

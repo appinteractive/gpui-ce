@@ -868,7 +868,8 @@ pub struct BackdropFilter {
     pub corner_radii: Corners<ScaledPixels>,
     pub corner_smoothing: f32,
     /// The filter chain applied to the backdrop, in scene (device-pixel) space. Identity filters
-    /// are dropped at paint time, so a `BackdropFilter` is only emitted when this is non-empty.
+    /// are dropped at paint time, and a `BackdropFilter` is only emitted when the chain has a
+    /// blur (colour stages alone draw nothing).
     ///
     /// Inline capacity is 4: a `SmallVec<[ScaledFilter; 4]>` is the same size as capacity 1 here
     /// (the heap repr already occupies that space), so chains up to 4 filters avoid allocating
@@ -882,6 +883,12 @@ impl BackdropFilter {
     /// Largest gaussian blur radius in this filter chain, in device pixels.
     pub fn max_blur_radius(&self) -> f32 {
         max_blur_radius(&self.filters)
+    }
+
+    /// Combined `(saturation, brightness)` of this filter chain; `(1.0, 1.0)` when it has no
+    /// colour stages.
+    pub fn color_adjustment(&self) -> (f32, f32) {
+        color_adjustment(&self.filters)
     }
 }
 
@@ -918,6 +925,12 @@ impl FilterBoundary {
     pub fn max_blur_radius(&self) -> f32 {
         max_blur_radius(&self.filters)
     }
+
+    /// Combined `(saturation, brightness)` of this filter chain; `(1.0, 1.0)` when it has no
+    /// colour stages.
+    pub fn color_adjustment(&self) -> (f32, f32) {
+        color_adjustment(&self.filters)
+    }
 }
 
 /// Returns the largest blur radius in a scene-space filter chain.
@@ -927,7 +940,24 @@ impl FilterBoundary {
 fn max_blur_radius(filters: &[ScaledFilter]) -> f32 {
     filters.iter().fold(0.0, |radius, filter| match filter {
         ScaledFilter::Blur(filter_radius) => radius.max(filter_radius.0),
+        ScaledFilter::Saturate(_) | ScaledFilter::Brightness(_) => radius,
     })
+}
+
+/// Returns the combined `(saturation, brightness)` of a scene-space filter chain: the product of
+/// every `Saturate` and of every `Brightness` factor. A chain without colour stages gives
+/// `(1.0, 1.0)`.
+///
+/// Like [`max_blur_radius`], this match is exhaustive so a new filter must be handled here.
+fn color_adjustment(filters: &[ScaledFilter]) -> (f32, f32) {
+    filters.iter().fold(
+        (1.0, 1.0),
+        |(saturation, brightness), filter| match filter {
+            ScaledFilter::Blur(_) => (saturation, brightness),
+            ScaledFilter::Saturate(factor) => (saturation * factor, brightness),
+            ScaledFilter::Brightness(factor) => (saturation, brightness * factor),
+        },
+    )
 }
 
 impl From<FilterBoundary> for Primitive {
@@ -1676,5 +1706,44 @@ mod tests {
                 "{name}"
             );
         }
+    }
+    #[test]
+    fn color_adjustment_multiplies_each_stage() {
+        let chain = [
+            ScaledFilter::Saturate(2.0),
+            ScaledFilter::Brightness(0.5),
+            ScaledFilter::Saturate(0.5),
+        ];
+        assert_eq!(color_adjustment(&chain), (1.0, 0.5));
+        assert_eq!(
+            color_adjustment(&[ScaledFilter::Blur(scaled(8.0))]),
+            (1.0, 1.0)
+        );
+        assert_eq!(color_adjustment(&[]), (1.0, 1.0));
+    }
+
+    #[test]
+    fn color_factors_follow_css_for_negative_and_nan() {
+        use crate::Filter;
+
+        assert_eq!(
+            Filter::Saturate(-1.5).scale(2.0),
+            ScaledFilter::Saturate(0.0)
+        );
+        assert_eq!(
+            Filter::Brightness(-0.2).scale(2.0),
+            ScaledFilter::Brightness(0.0)
+        );
+        assert_eq!(
+            Filter::Saturate(f32::NAN).scale(1.0),
+            ScaledFilter::Saturate(1.0)
+        );
+        assert_eq!(
+            Filter::Brightness(1.8).scale(3.0),
+            ScaledFilter::Brightness(1.8)
+        );
+        assert!(Filter::Saturate(f32::NAN).is_identity());
+        assert!(Filter::Brightness(1.0).is_identity());
+        assert!(!Filter::Saturate(0.0).is_identity());
     }
 }

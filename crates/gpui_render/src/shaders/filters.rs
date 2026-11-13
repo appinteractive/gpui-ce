@@ -106,9 +106,9 @@ pub mod blur {
         pub source_size: Vec2f,
         pub target_size: Vec2f,
         pub corner_smoothing: f32,
+        pub saturation: f32,
+        pub brightness: f32,
         pub padding0: u32,
-        pub padding1: u32,
-        pub padding2: u32,
     }
     uniform!(group(1), binding(0), BLUR_LOCALS: BlurUniforms);
     texture!(group(1), binding(1), BLUR_TEXTURE: Texture2D<f32>);
@@ -140,11 +140,35 @@ pub mod blur {
             position / get!(BLUR_LOCALS).target_size,
             0.0,
         );
+        let saturation = get!(BLUR_LOCALS).saturation;
+        let brightness = get!(BLUR_LOCALS).brightness;
+        // Saturation then brightness on the premultiplied sample. The saturation blend is
+        // written as `luma * (1 - s) + rgb * s`, which equals `luma + (rgb - luma) * s` and is
+        // exact at s = 1.
+        let luma = dot(
+            vec3f(blurred.x, blurred.y, blurred.z),
+            LINEAR_RGB_LUMA_WEIGHTS,
+        );
+        let red = clamp(
+            (luma * (1.0 - saturation) + blurred.x * saturation) * brightness,
+            0.0,
+            blurred.w,
+        );
+        let green = clamp(
+            (luma * (1.0 - saturation) + blurred.y * saturation) * brightness,
+            0.0,
+            blurred.w,
+        );
+        let blue = clamp(
+            (luma * (1.0 - saturation) + blurred.z * saturation) * brightness,
+            0.0,
+            blurred.w,
+        );
         let factor = coverage * get!(BLUR_LOCALS).opacity;
         vec4f(
-            blurred.x * factor,
-            blurred.y * factor,
-            blurred.z * factor,
+            red * factor,
+            green * factor,
+            blue * factor,
             blurred.w * factor,
         )
     }

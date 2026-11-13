@@ -536,6 +536,21 @@ impl BoxShadow {
 pub enum Filter {
     /// A gaussian blur with the given radius, in logical pixels. Maps to CSS `blur(<px>)`.
     Blur(Pixels),
+    /// Colour saturation, like CSS `saturate(<factor>)`: 1.0 leaves colours unchanged, 0.0 is
+    /// greyscale, and values above 1.0 oversaturate. Negative factors count as 0.0 and NaN as
+    /// 1.0.
+    ///
+    /// In a backdrop filter ([`Styled::backdrop_filter`]) the colour stages take effect in a
+    /// chain that also has a non-zero blur; a backdrop chain without blur is dropped. A content
+    /// filter ([`Styled::filter`]) applies them with or without blur.
+    Saturate(f32),
+    /// Brightness, like CSS `brightness(<factor>)`: 1.0 leaves colours unchanged, 0.0 is black,
+    /// and values above 1.0 brighten. Negative factors count as 0.0 and NaN as 1.0.
+    ///
+    /// In a backdrop filter ([`Styled::backdrop_filter`]) the colour stages take effect in a
+    /// chain that also has a non-zero blur; a backdrop chain without blur is dropped. A content
+    /// filter ([`Styled::filter`]) applies them with or without blur.
+    Brightness(f32),
 }
 
 impl Filter {
@@ -548,6 +563,9 @@ impl Filter {
     pub fn is_identity(&self) -> bool {
         match self {
             Filter::Blur(radius) => *radius <= Pixels::ZERO,
+            Filter::Saturate(factor) | Filter::Brightness(factor) => {
+                factor.is_nan() || *factor == 1.0
+            }
         }
     }
 
@@ -556,7 +574,19 @@ impl Filter {
     pub fn scale(&self, factor: f32) -> ScaledFilter {
         match self {
             Filter::Blur(radius) => ScaledFilter::Blur(radius.scale(factor)),
+            Filter::Saturate(amount) => ScaledFilter::Saturate(sanitized_factor(*amount)),
+            Filter::Brightness(amount) => ScaledFilter::Brightness(sanitized_factor(*amount)),
         }
+    }
+}
+
+/// Colour-stage factors follow CSS: negative values are rejected (clamped to 0.0) and NaN is the
+/// identity.
+fn sanitized_factor(factor: f32) -> f32 {
+    if factor.is_nan() {
+        1.0
+    } else {
+        factor.max(0.0)
     }
 }
 
@@ -571,6 +601,10 @@ impl Filter {
 pub enum ScaledFilter {
     /// A gaussian blur with the given radius, in scaled (device) pixels.
     Blur(ScaledPixels),
+    /// Colour saturation factor; 1.0 is the identity. Not scaled with the window.
+    Saturate(f32),
+    /// Brightness factor; 1.0 is the identity. Not scaled with the window.
+    Brightness(f32),
 }
 
 /// How to handle whitespace in text
