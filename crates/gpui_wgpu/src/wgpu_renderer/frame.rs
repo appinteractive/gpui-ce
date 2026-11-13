@@ -437,7 +437,7 @@ impl<'a> FrameEncoder<'a> {
                             self.targets.current(),
                             FilterCompositeParameters {
                                 bounds: filter.bounds,
-                                content_mask: filter.content_mask.bounds,
+                                content_mask: filter.content_mask,
                                 corner_radii: filter.corner_radii,
                                 corner_smoothing: filter.corner_smoothing,
                                 blur_radius: filter.max_blur_radius(),
@@ -502,7 +502,7 @@ impl<'a> FrameEncoder<'a> {
                         parent,
                         FilterCompositeParameters {
                             bounds: boundary.bounds,
-                            content_mask: boundary.content_mask.bounds,
+                            content_mask: boundary.content_mask,
                             corner_radii: boundary.corner_radii,
                             corner_smoothing: boundary.corner_smoothing,
                             blur_radius: boundary.max_blur_radius(),

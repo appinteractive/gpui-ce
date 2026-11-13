@@ -1,4 +1,4 @@
-use gpui::{Bounds, Corners, ScaledPixels, point, size};
+use gpui::{Bounds, ContentMask, Corners, Edges, ScaledPixels, point, size};
 use gpui_render::shaders::interface as shader_interface;
 use gpui_render::{
     blur::{
@@ -18,7 +18,7 @@ pub(super) struct FrameUniformRequirements {
     pub(super) surface_count: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<BlurUniforms>() == 112);
+const _: () = assert!(std::mem::size_of::<BlurUniforms>() == 128);
 
 impl WgpuRenderer {
     fn draw_filter_pass(
@@ -214,7 +214,11 @@ impl WgpuRenderer {
                 &target,
                 FilterCompositeParameters {
                     bounds,
-                    content_mask: bounds,
+                    // No fade: the snapshot copies the layers unchanged.
+                    content_mask: ContentMask {
+                        bounds,
+                        fade_out: Edges::default(),
+                    },
                     corner_radii: Corners::default(),
                     corner_smoothing: 0.0,
                     blur_radius: 0.0,

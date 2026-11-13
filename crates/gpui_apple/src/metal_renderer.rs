@@ -3,9 +3,9 @@ use anyhow::Result;
 use block::ConcreteBlock;
 use core_graphics::geometry::CGSize;
 use gpui::{
-    AtlasTextureId, Bounds, Corners, DevicePixels, FilterRenderTarget, MAX_FILTER_GROUP_DEPTH,
-    MonochromeSprite, PaintSurface, Path, PolychromeSprite, PrimitiveBatch, Quad, RenderCommand,
-    ScaledPixels, Scene, Shadow, Size, SurfaceSource, Underline, size,
+    AtlasTextureId, Bounds, ContentMask, Corners, DevicePixels, Edges, FilterRenderTarget,
+    MAX_FILTER_GROUP_DEPTH, MonochromeSprite, PaintSurface, Path, PolychromeSprite, PrimitiveBatch,
+    Quad, RenderCommand, ScaledPixels, Scene, Shadow, Size, SurfaceSource, Underline, size,
 };
 use gpui_render::{
     TargetStack,
@@ -1067,7 +1067,7 @@ impl MetalRenderer {
                                 Some(pong),
                                 viewport_size,
                                 filter.bounds,
-                                filter.content_mask.bounds,
+                                filter.content_mask,
                                 filter.corner_radii,
                                 filter.corner_smoothing,
                                 filter.max_blur_radius(),
@@ -1125,7 +1125,7 @@ impl MetalRenderer {
                         blur_pong_owned.as_deref(),
                         viewport_size,
                         boundary.bounds,
-                        boundary.content_mask.bounds,
+                        boundary.content_mask,
                         boundary.corner_radii,
                         boundary.corner_smoothing,
                         boundary.max_blur_radius(),
@@ -1280,7 +1280,7 @@ impl MetalRenderer {
         pong: Option<&metal::TextureRef>,
         viewport_size: Size<DevicePixels>,
         bounds: Bounds<ScaledPixels>,
-        content_mask: Bounds<ScaledPixels>,
+        content_mask: ContentMask<ScaledPixels>,
         corner_radii: Corners<ScaledPixels>,
         corner_smoothing: f32,
         blur_radius: f32,
@@ -1446,7 +1446,11 @@ impl MetalRenderer {
                 None,
                 viewport_size,
                 bounds,
-                bounds,
+                // No fade: the snapshot copies the layers unchanged.
+                ContentMask {
+                    bounds,
+                    fade_out: Edges::default(),
+                },
                 Corners::default(),
                 0.0,
                 0.0,

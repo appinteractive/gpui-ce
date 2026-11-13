@@ -773,3 +773,83 @@ fn content_filter_saturate_works_with_blur() {
     );
     assert_eq!(pixel[3], 255, "the group stays opaque: {pixel:?}");
 }
+
+/// Renders 6 px vertical stripes under a backdrop blur whose content mask fades the bottom 40 px,
+/// and returns the red-channel contrast between two neighbouring stripes at each sampled row.
+fn faded_backdrop_contrast(rows: &[u32]) -> Vec<f32> {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let mut scene = Scene::default();
+    let warm: Hsla = gpui::rgb_to_hsla(gpui::rgb(0xc83c3c));
+    let cool: Hsla = gpui::rgb_to_hsla(gpui::rgb(0x1e78dc));
+    for stripe in 0..52 {
+        scene.insert_primitive(Quad {
+            bounds: bounds(stripe as f32 * 6.0, 0.0, 6.0, 100.0),
+            content_mask: full_mask(),
+            background: solid_background(if stripe % 2 == 0 { warm } else { cool }),
+            ..Default::default()
+        });
+    }
+    let filter_bounds = bounds(50.0, 20.0, 200.0, 60.0);
+    scene.insert_primitive(BackdropFilter {
+        order: 0,
+        bounds: filter_bounds,
+        content_mask: ContentMask {
+            bounds: filter_bounds,
+            fade_out: Edges {
+                top: ScaledPixels(0.0),
+                right: ScaledPixels(0.0),
+                bottom: ScaledPixels(40.0),
+                left: ScaledPixels(0.0),
+            },
+        },
+        corner_radii: Corners::default(),
+        corner_smoothing: 0.0,
+        // The kernel runs on the half-resolution copy, so 4 px is about a 4 px deviation here.
+        filters: smallvec![ScaledFilter::Blur(ScaledPixels(4.0))],
+        opacity: 1.0,
+    });
+    scene.finish();
+    let image = renderer
+        .render_scene_to_image(&scene, TARGET)
+        .expect("render must succeed");
+    // Stripes 14 and 15 are a warm and a cool stripe well inside the filter bounds.
+    rows.iter()
+        .map(|&y| f32::from(image.get_pixel(87, y).0[0]) - f32::from(image.get_pixel(93, y).0[0]))
+        .collect()
+}
+
+#[test]
+fn backdrop_composite_fades_with_the_content_mask() {
+    // Rows every 5 px from the top of the filter (y = 20) to its last row (y = 79).
+    let rows: Vec<u32> = (0..12).map(|step| 22 + step * 5).chain([79]).collect();
+    let contrast = faded_backdrop_contrast(&rows);
+    let at = |y: u32| contrast[rows.iter().position(|&row| row == y).unwrap()];
+    let unblurred = 200.0 - 30.0;
+
+    // The fade covers y = 40..80, so the top 15 px (y = 20..35) are fully blurred.
+    for y in [22, 27, 32] {
+        assert!(
+            at(y) < 0.25 * unblurred,
+            "row {y} should be blurred: {contrast:?}"
+        );
+    }
+    // The bottom row is almost fully faded out, so the sharp stripes show through.
+    assert!(
+        at(79) > 0.95 * unblurred,
+        "the bottom row should be unblurred: {contrast:?}"
+    );
+    // Between the two, contrast only rises (a small tolerance covers rounding).
+    for pair in rows.windows(2).zip(contrast.windows(2)) {
+        let (rows, values) = pair;
+        assert!(
+            values[1] >= values[0] - 2.0,
+            "contrast must not fall between rows {} and {}: {contrast:?}",
+            rows[0],
+            rows[1]
+        );
+    }
+    assert!(
+        at(77) > at(42) + 0.5 * unblurred,
+        "the fade must ramp over the bottom rows: {contrast:?}"
+    );
+}
