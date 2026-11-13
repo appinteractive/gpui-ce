@@ -491,6 +491,7 @@ impl WgpuContext {
             let instance = backend.instance(None);
             let adapter =
                 gpui::block_on(instance.raw.request_adapter(&wgpu::RequestAdapterOptions {
+                    apply_limit_buckets: false,
                     // LowPower avoids waking a discrete GPU just for snapshots on dual-GPU
                     // systems.
                     power_preference: wgpu::PowerPreference::LowPower,
@@ -875,6 +876,7 @@ impl WgpuContext {
             .push_error_scope(wgpu::ErrorFilter::Validation);
 
         let test_config = wgpu::SurfaceConfiguration {
+            color_space: wgpu::SurfaceColorSpace::Auto,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: caps.formats[0],
             width: 64,

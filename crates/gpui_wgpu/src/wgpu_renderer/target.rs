@@ -74,6 +74,7 @@ impl RenderTarget {
         };
         Ok(Self {
             config: wgpu::SurfaceConfiguration {
+            color_space: wgpu::SurfaceColorSpace::Auto,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format,
                 width,
