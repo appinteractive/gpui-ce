@@ -901,6 +901,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn display_color_space(&self) -> DisplayColorSpace {
         DisplayColorSpace::Srgb
     }
+    /// Whether this window's renderer executes [`Window::paint_backdrop_color_conversion`]
+    /// primitives. False where the renderer skips them (Metal, DirectX).
+    fn supports_backdrop_color_conversion(&self) -> bool {
+        false
+    }
     fn mouse_position(&self) -> Point<Pixels>;
     fn modifiers(&self) -> Modifiers;
     fn capslock(&self) -> Capslock;

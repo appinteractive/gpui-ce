@@ -2851,6 +2851,13 @@ impl Window {
         self.platform_window.display_color_space()
     }
 
+    /// Whether this window's renderer executes [`Window::paint_backdrop_color_conversion`].
+    /// Metal and DirectX skip the primitive: a caller that converts its own fill colours has to
+    /// do so only when this is true, or it would mix converted colours into unconverted pixels.
+    pub fn supports_backdrop_color_conversion(&self) -> bool {
+        self.platform_window.supports_backdrop_color_conversion()
+    }
+
     /// Returns the size of the drawable area within the window.
     pub fn viewport_size(&self) -> Size<Pixels> {
         self.viewport_size
@@ -4688,7 +4695,7 @@ impl Window {
     ///
     /// Only the wgpu renderer converts; Metal and DirectX skip the primitive, so a caller that
     /// converts its own fill colours should do so only where [`Window::display_color_space`]
-    /// asks for it and the wgpu renderer is in use.
+    /// asks for it and [`Window::supports_backdrop_color_conversion`] is true.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn paint_backdrop_color_conversion(

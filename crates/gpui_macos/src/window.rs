@@ -1714,6 +1714,11 @@ impl PlatformWindow for MacWindow {
         }
     }
 
+    /// Only the wgpu renderer converts; the retired Metal renderer skips the primitive.
+    fn supports_backdrop_color_conversion(&self) -> bool {
+        cfg!(feature = "wgpu")
+    }
+
     fn mouse_position(&self) -> Point<Pixels> {
         let position = unsafe {
             self.0
