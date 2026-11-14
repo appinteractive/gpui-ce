@@ -929,3 +929,78 @@ fn row_mask_is_linear_between_samples_and_held_at_the_ends() {
     let clamped = BackdropRowMask::new(ScaledPixels(0.0), ScaledPixels(1.0), &[2.0, -1.0, f32::NAN]).unwrap();
     assert_eq!(&clamped.alphas[..3], &[1.0, 0.0, 1.0]);
 }
+
+/// Two-pixel row stripes, one per half-resolution texel row, under a near-identity backdrop blur
+/// that composites with `row_mask`. Returns the red channel of column 100 for every row.
+fn row_striped_backdrop_column(row_mask: Option<BackdropRowMask>) -> Vec<f32> {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let mut scene = Scene::default();
+    let warm: Hsla = gpui::rgb_to_hsla(gpui::rgb(0xc83c3c));
+    let cool: Hsla = gpui::rgb_to_hsla(gpui::rgb(0x1e78dc));
+    for texel in 0..50 {
+        scene.insert_primitive(Quad {
+            bounds: bounds(0.0, texel as f32 * 2.0, 300.0, 2.0),
+            content_mask: full_mask(),
+            background: solid_background(if texel % 2 == 0 { warm } else { cool }),
+            ..Default::default()
+        });
+    }
+    let filter_bounds = bounds(50.0, 0.0, 200.0, 100.0);
+    scene.insert_primitive(BackdropFilter {
+        order: 0,
+        bounds: filter_bounds,
+        content_mask: ContentMask {
+            bounds: filter_bounds,
+            fade_out: Edges::default(),
+        },
+        corner_radii: Corners::default(),
+        corner_smoothing: 0.0,
+        filters: smallvec![ScaledFilter::Blur(ScaledPixels(0.02))],
+        opacity: 1.0,
+        row_mask,
+    });
+    scene.finish();
+    let image = renderer
+        .render_scene_to_image(&scene, TARGET)
+        .expect("render must succeed");
+    (0..100)
+        .map(|y| f32::from(image.get_pixel(100, y).0[0]))
+        .collect()
+}
+
+#[test]
+fn premultiplied_row_mask_weights_source_texel_rows() {
+    // Mask samples at the texel row centres (device y 1, 3, 5, ...): coverage 1, 0.9, 0.1, 0.
+    let samples = [1.0, 0.9, 0.1, 0.0];
+    let plain = BackdropRowMask::new(ScaledPixels(1.0), ScaledPixels(2.0), &samples).unwrap();
+    let premultiplied = plain.premultiplied();
+    let output_masked = row_striped_backdrop_column(Some(plain));
+    let source_masked = row_striped_backdrop_column(Some(premultiplied));
+    // Source texel row i is warm (200) for even i and cool (30) for odd i, and so is the sharp
+    // backdrop underneath, row y reading texel y / 2. Premultiplied: out = (1 - f) t0 C0 + f t1 C1
+    // + sharp (1 - ((1 - f) t0 + f t1)) for f the fraction between texel row centres.
+    let colour = |texel: usize| if texel % 2 == 0 { 200.0 } else { 30.0 };
+    let coverage = |texel: usize| samples.get(texel).copied().unwrap_or(0.0);
+    let mut largest_difference: f32 = 0.0;
+    for y in 0..12usize {
+        let position = (y as f32 + 0.5) / 2.0 - 0.5;
+        let lower = position.floor().max(0.0) as usize;
+        let upper = (position.floor() + 1.0).max(0.0) as usize;
+        let fraction = position - position.floor();
+        let fraction = if position < 0.0 { 0.0 } else { fraction };
+        let (c0, c1) = (coverage(lower), coverage(upper));
+        let source = (1.0 - fraction) * c0 * colour(lower) + fraction * c1 * colour(upper);
+        let alpha = (1.0 - fraction) * c0 + fraction * c1;
+        let expected = source + colour(y / 2) * (1.0 - alpha);
+        assert!(
+            (source_masked[y] - expected).abs() < 2.5,
+            "row {y}: premultiplied {} against {expected:.1}",
+            source_masked[y]
+        );
+        largest_difference = largest_difference.max((source_masked[y] - output_masked[y]).abs());
+    }
+    assert!(
+        largest_difference > 8.0,
+        "premultiplied and output-pixel masks must differ on row stripes, by {largest_difference}"
+    );
+}

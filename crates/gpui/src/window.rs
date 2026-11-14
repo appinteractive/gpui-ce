@@ -4611,6 +4611,30 @@ impl Window {
         self.insert_backdrop_filter(bounds, corner_radii, corner_smoothing, filters, row_mask);
     }
 
+    /// Like [`Window::paint_backdrop_filter_with_row_mask`], with the mask applied at the
+    /// resolution of the blurred source (see [`BackdropRowMask::premultiplied`]).
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_backdrop_filter_with_premultiplied_row_mask(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
+        filters: &[Filter],
+        origin: Pixels,
+        step: Pixels,
+        samples: &[f32],
+    ) {
+        let scale_factor = self.scale_factor();
+        let row_mask = BackdropRowMask::new(
+            origin.scale(scale_factor),
+            step.scale(scale_factor),
+            samples,
+        )
+        .map(BackdropRowMask::premultiplied);
+        self.insert_backdrop_filter(bounds, corner_radii, corner_smoothing, filters, row_mask);
+    }
+
     fn insert_backdrop_filter(
         &mut self,
         bounds: Bounds<Pixels>,

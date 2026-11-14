@@ -898,6 +898,9 @@ pub struct BackdropRowMask {
     pub count: u32,
     /// Coverage samples in 0..1; entries past `count` are ignored.
     pub alphas: [f32; BACKDROP_ROW_MASK_SAMPLES],
+    /// Whether the mask applies to the composite's source texels instead of to output pixels.
+    /// See [`BackdropRowMask::premultiplied`].
+    pub premultiplied: bool,
 }
 
 impl BackdropRowMask {
@@ -918,7 +921,21 @@ impl BackdropRowMask {
             step,
             count: count as u32,
             alphas,
+            premultiplied: false,
         })
+    }
+
+    /// Applies the mask at the resolution of the composite's source, not of the output. The blur
+    /// composite reads a texture below window resolution (the blur runs on a half-resolution
+    /// copy). By default the upsampled colour is multiplied by the coverage at each output pixel.
+    /// Premultiplied, each source texel row is first weighted by the coverage at the centre of
+    /// that row, and the weighted rows are then interpolated. That is how a compositor that
+    /// fades a half-resolution layer behaves, and the two differ wherever the coverage changes
+    /// within one source texel and the content differs between neighbouring texel rows. A mask
+    /// whose samples sit at the texel row centres gives the exact premultiplied form.
+    pub fn premultiplied(mut self) -> Self {
+        self.premultiplied = true;
+        self
     }
 
     /// Coverage at window row `y` (device pixels), as the renderer evaluates it.

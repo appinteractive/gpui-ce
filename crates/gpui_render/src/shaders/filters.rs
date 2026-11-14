@@ -114,7 +114,9 @@ pub mod blur {
         pub row_mask_origin: f32,
         pub row_mask_step: f32,
         pub row_mask_count: u32,
-        pub padding1: u32,
+        /// 0: the mask multiplies the coverage at each output pixel; 1: it weights the source
+        /// texel rows (`BackdropRowMask::premultiplied`).
+        pub row_mask_mode: u32,
         /// The samples, four per vector.
         pub row_mask: [Vec4f; 16],
     }
@@ -180,13 +182,49 @@ pub mod blur {
         }
     }
 
-    pub fn blur_composite_color(position: Vec2f, coverage: f32) -> Vec4f {
-        let blurred = texture_sample_level(
+    /// Coverage of the row mask at the output pixel: 1 in premultiplied mode, where the mask is
+    /// applied to the source texel rows by `composite_source_sample` instead.
+    pub fn output_row_mask_alpha(y: f32) -> f32 {
+        if get!(BLUR_LOCALS).row_mask_mode == 1u32 {
+            return 1.0;
+        }
+        row_mask_alpha(y)
+    }
+
+    /// The composite's source at window position `position`. Premultiplied row mask: the two
+    /// source texel rows around the position are each weighted by the mask at their own centre,
+    /// then interpolated vertically (horizontal interpolation is the sampler's).
+    pub fn composite_source_sample(position: Vec2f) -> Vec4f {
+        let uniforms = get!(BLUR_LOCALS);
+        let coordinates = position / uniforms.target_size;
+        if uniforms.row_mask_count == 0u32 || uniforms.row_mask_mode == 0u32 {
+            return texture_sample_level(BLUR_TEXTURE, BLUR_SAMPLER, coordinates, 0.0);
+        }
+        let rows = uniforms.source_size.y;
+        let row_position = coordinates.y * rows - 0.5;
+        let lower = floor(row_position);
+        let fraction = row_position - lower;
+        let lower_row = clamp(lower, 0.0, rows - 1.0);
+        let upper_row = clamp(lower + 1.0, 0.0, rows - 1.0);
+        let lower_v = (lower_row + 0.5) / rows;
+        let upper_v = (upper_row + 0.5) / rows;
+        let lower_sample = texture_sample_level(
             BLUR_TEXTURE,
             BLUR_SAMPLER,
-            position / get!(BLUR_LOCALS).target_size,
+            vec2f(coordinates.x, lower_v),
             0.0,
-        );
+        ) * row_mask_alpha(lower_v * uniforms.target_size.y);
+        let upper_sample = texture_sample_level(
+            BLUR_TEXTURE,
+            BLUR_SAMPLER,
+            vec2f(coordinates.x, upper_v),
+            0.0,
+        ) * row_mask_alpha(upper_v * uniforms.target_size.y);
+        lower_sample * (1.0 - fraction) + upper_sample * fraction
+    }
+
+    pub fn blur_composite_color(position: Vec2f, coverage: f32) -> Vec4f {
+        let blurred = composite_source_sample(position);
         let saturation = get!(BLUR_LOCALS).saturation;
         let brightness = get!(BLUR_LOCALS).brightness;
         // Saturation then brightness on the premultiplied sample. The saturation blend is
@@ -308,7 +346,7 @@ pub mod blur {
         );
         let faded_coverage = coverage
             * ContentMask::alpha(get!(BLUR_LOCALS).content_mask, input.position.xy())
-            * row_mask_alpha(input.position.y);
+            * output_row_mask_alpha(input.position.y);
         blur_composite_color(input.position.xy(), faded_coverage)
     }
 
@@ -379,7 +417,7 @@ pub mod blur {
         );
         let faded_coverage = coverage
             * ContentMask::alpha(get!(BLUR_LOCALS).content_mask, input.position.xy())
-            * row_mask_alpha(input.position.y);
+            * output_row_mask_alpha(input.position.y);
         blur_composite_color(input.position.xy(), faded_coverage)
     }
 }

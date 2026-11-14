@@ -234,7 +234,7 @@ pub const RENDER_BUFFER_LAYOUTS: &[gpui::SceneBufferLayout] = &[
         row_mask_origin,
         row_mask_step,
         row_mask_count,
-        padding1,
+        row_mask_mode,
         row_mask
     ),
     render_layout!(crate::path_types::PathSprite, "PathSprite", bounds),

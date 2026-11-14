@@ -143,11 +143,13 @@ impl BlurUniforms {
     pub fn with_row_mask(mut self, mask: Option<&BackdropRowMask>) -> Self {
         let Some(mask) = mask else {
             self.row_mask_count = 0;
+            self.row_mask_mode = 0;
             return self;
         };
         self.row_mask_origin = mask.origin.0;
         self.row_mask_step = mask.step.0;
         self.row_mask_count = mask.count.min(BACKDROP_ROW_MASK_SAMPLES as u32);
+        self.row_mask_mode = u32::from(mask.premultiplied);
         for (index, chunk) in mask.alphas.chunks(4).enumerate() {
             self.row_mask[index] = vec4f(chunk[0], chunk[1], chunk[2], chunk[3]);
         }
@@ -270,7 +272,7 @@ fn empty_uniforms(downsample_mode: DownsampleMode) -> BlurUniforms {
         row_mask_origin: 0.0,
         row_mask_step: 1.0,
         row_mask_count: 0,
-        padding1: 0,
+        row_mask_mode: 0,
         row_mask: [vec4f(0.0, 0.0, 0.0, 0.0); 16],
     }
 }
@@ -292,6 +294,9 @@ mod tests {
         assert_eq!(uniforms.row_mask_step, 2.0);
         assert_eq!(uniforms.row_mask[0].y, 0.01);
         assert_eq!(uniforms.row_mask[15].w, 0.63);
+        assert_eq!(uniforms.row_mask_mode, 0);
+        let premultiplied = BlurUniforms::copy([8.0, 8.0]).with_row_mask(Some(&mask.premultiplied()));
+        assert_eq!(premultiplied.row_mask_mode, 1);
         assert_eq!(BlurUniforms::copy([8.0, 8.0]).with_row_mask(None).row_mask_count, 0);
     }
 
