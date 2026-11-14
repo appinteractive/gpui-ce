@@ -877,6 +877,59 @@ pub struct BackdropFilter {
     pub filters: SmallVec<[ScaledFilter; 4]>,
     /// Element opacity captured at paint time, multiplied into the composited result.
     pub opacity: f32,
+    /// Optional per-row coverage of the composite, multiplied with the content mask's.
+    pub row_mask: Option<BackdropRowMask>,
+}
+
+/// The most samples a [`BackdropRowMask`] holds.
+pub const BACKDROP_ROW_MASK_SAMPLES: usize = 64;
+
+/// A coverage profile along y for a backdrop filter's composite, like a CSS
+/// `mask-image: linear-gradient(to bottom, ...)` with evenly spaced stops. Sample `i` sits at
+/// window row `origin + i * step` (device pixels). Coverage is linear between samples and holds
+/// the first and last sample's value above and below them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BackdropRowMask {
+    /// Window y of the first sample, device pixels.
+    pub origin: ScaledPixels,
+    /// Distance between samples, device pixels; positive.
+    pub step: ScaledPixels,
+    /// Number of samples in use, 1 to [`BACKDROP_ROW_MASK_SAMPLES`].
+    pub count: u32,
+    /// Coverage samples in 0..1; entries past `count` are ignored.
+    pub alphas: [f32; BACKDROP_ROW_MASK_SAMPLES],
+}
+
+impl BackdropRowMask {
+    /// A mask from up to [`BACKDROP_ROW_MASK_SAMPLES`] samples (extra samples are dropped).
+    /// Returns `None` without samples or with a step that is not positive. Samples are clamped
+    /// to 0..1 and NaN counts as 1.
+    pub fn new(origin: ScaledPixels, step: ScaledPixels, samples: &[f32]) -> Option<Self> {
+        if samples.is_empty() || !(step.0 > 0.0) {
+            return None;
+        }
+        let mut alphas = [0.0; BACKDROP_ROW_MASK_SAMPLES];
+        let count = samples.len().min(BACKDROP_ROW_MASK_SAMPLES);
+        for (slot, sample) in alphas.iter_mut().zip(samples) {
+            *slot = if sample.is_nan() { 1.0 } else { sample.clamp(0.0, 1.0) };
+        }
+        Some(Self {
+            origin,
+            step,
+            count: count as u32,
+            alphas,
+        })
+    }
+
+    /// Coverage at window row `y` (device pixels), as the renderer evaluates it.
+    pub fn alpha_at(&self, y: f32) -> f32 {
+        let last = self.count.saturating_sub(1) as f32;
+        let position = ((y - self.origin.0) / self.step.0).clamp(0.0, last);
+        let lower = position.floor() as usize;
+        let upper = (lower + 1).min(self.count.saturating_sub(1) as usize);
+        let fraction = position - lower as f32;
+        self.alphas[lower] * (1.0 - fraction) + self.alphas[upper] * fraction
+    }
 }
 
 impl BackdropFilter {

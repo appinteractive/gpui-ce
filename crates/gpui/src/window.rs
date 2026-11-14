@@ -1,6 +1,7 @@
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AtlasTile, AvailableSpace, BackdropFilter, Background, BorderStyle, Bounds,
+    AsyncWindowContext, AtlasTile, AvailableSpace, BackdropFilter,
+    BackdropRowMask, Background, BorderStyle, Bounds,
     BoxShadow, Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
     EntityId, EventEmitter, FileDropEvent, Filter, FilterBoundary, FontId, Global, GlobalElementId,
@@ -4580,6 +4581,44 @@ impl Window {
         corner_smoothing: f32,
         filters: &[Filter],
     ) {
+        self.insert_backdrop_filter(bounds, corner_radii, corner_smoothing, filters, None);
+    }
+
+    /// Like [`Window::paint_backdrop_filter`], with the composite's coverage varying along y:
+    /// `samples[i]` (0..1) applies at window y `origin + i * step`, linear in between, and the
+    /// first and last values hold above and below (a CSS `mask-image: linear-gradient(to bottom,
+    /// ...)` with evenly spaced stops). The coverage multiplies the content mask's. Up to
+    /// [`crate::BACKDROP_ROW_MASK_SAMPLES`] samples are used. Without samples, or with a step that is not
+    /// positive, it paints as [`Window::paint_backdrop_filter`] does.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_backdrop_filter_with_row_mask(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
+        filters: &[Filter],
+        origin: Pixels,
+        step: Pixels,
+        samples: &[f32],
+    ) {
+        let scale_factor = self.scale_factor();
+        let row_mask = BackdropRowMask::new(
+            origin.scale(scale_factor),
+            step.scale(scale_factor),
+            samples,
+        );
+        self.insert_backdrop_filter(bounds, corner_radii, corner_smoothing, filters, row_mask);
+    }
+
+    fn insert_backdrop_filter(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
+        filters: &[Filter],
+        row_mask: Option<BackdropRowMask>,
+    ) {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
@@ -4605,6 +4644,7 @@ impl Window {
             corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
             filters,
             opacity: 1.0,
+            row_mask,
         });
     }
 

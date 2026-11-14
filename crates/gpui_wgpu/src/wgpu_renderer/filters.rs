@@ -18,7 +18,7 @@ pub(super) struct FrameUniformRequirements {
     pub(super) surface_count: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<BlurUniforms>() == 128);
+const _: () = assert!(std::mem::size_of::<BlurUniforms>() == 400);
 
 impl WgpuRenderer {
     fn draw_filter_pass(
@@ -164,7 +164,8 @@ impl WgpuRenderer {
             parameters.clip,
             source_size,
             [self.target.width() as f32, self.target.height() as f32],
-        );
+        )
+        .with_row_mask(parameters.row_mask.as_ref());
         let resources = self.resources();
         let pipeline = if uniforms.corner_smoothing > 0.0 {
             &resources.pipelines.smoothed_blur_composite
@@ -226,6 +227,7 @@ impl WgpuRenderer {
                     saturation: 1.0,
                     brightness: 1.0,
                     clip: FilterCompositeClip::ContentShape,
+                    row_mask: None,
                 },
                 full_size,
             );

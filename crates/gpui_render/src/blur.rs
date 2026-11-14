@@ -6,7 +6,8 @@ pub use crate::shaders::{
         Edges as ShaderEdges,
     },
 };
-use gpui::{Bounds, ContentMask, Corners, ScaledPixels};
+use gpui::{BACKDROP_ROW_MASK_SAMPLES, BackdropRowMask, Bounds, ContentMask, Corners, ScaledPixels};
+use wgsl_rs::std::vec4f;
 use wgsl_rs::std::vec2f;
 
 pub const DOWNSAMPLE_FACTOR: u32 = 2;
@@ -45,6 +46,8 @@ pub struct FilterCompositeParameters {
     /// Combined brightness of the filter chain; 1.0 is the identity.
     pub brightness: f32,
     pub clip: FilterCompositeClip,
+    /// Per-row coverage multiplied into the composite (backdrop filters only).
+    pub row_mask: Option<BackdropRowMask>,
 }
 
 #[derive(Clone, Copy)]
@@ -132,6 +135,23 @@ impl BlurUniforms {
                 target_size,
             )
         }
+    }
+}
+
+impl BlurUniforms {
+    /// Sets the composite's per-row coverage; `None` leaves it off.
+    pub fn with_row_mask(mut self, mask: Option<&BackdropRowMask>) -> Self {
+        let Some(mask) = mask else {
+            self.row_mask_count = 0;
+            return self;
+        };
+        self.row_mask_origin = mask.origin.0;
+        self.row_mask_step = mask.step.0;
+        self.row_mask_count = mask.count.min(BACKDROP_ROW_MASK_SAMPLES as u32);
+        for (index, chunk) in mask.alphas.chunks(4).enumerate() {
+            self.row_mask[index] = vec4f(chunk[0], chunk[1], chunk[2], chunk[3]);
+        }
+        self
     }
 }
 
@@ -247,12 +267,33 @@ fn empty_uniforms(downsample_mode: DownsampleMode) -> BlurUniforms {
         saturation: 1.0,
         brightness: 1.0,
         padding0: 0,
+        row_mask_origin: 0.0,
+        row_mask_step: 1.0,
+        row_mask_count: 0,
+        padding1: 0,
+        row_mask: [vec4f(0.0, 0.0, 0.0, 0.0); 16],
     }
 }
 
+const _: () = assert!(BACKDROP_ROW_MASK_SAMPLES == 16 * 4);
+
 #[cfg(test)]
 mod tests {
-    use super::downsampled_dimension;
+    use super::{BlurUniforms, downsampled_dimension};
+    use gpui::{BackdropRowMask, ScaledPixels};
+
+    #[test]
+    fn row_mask_fills_the_uniforms_in_order() {
+        let samples: Vec<f32> = (0..70).map(|i| i as f32 / 100.0).collect();
+        let mask = BackdropRowMask::new(ScaledPixels(3.0), ScaledPixels(2.0), &samples).unwrap();
+        let uniforms = BlurUniforms::copy([8.0, 8.0]).with_row_mask(Some(&mask));
+        assert_eq!(uniforms.row_mask_count, 64);
+        assert_eq!(uniforms.row_mask_origin, 3.0);
+        assert_eq!(uniforms.row_mask_step, 2.0);
+        assert_eq!(uniforms.row_mask[0].y, 0.01);
+        assert_eq!(uniforms.row_mask[15].w, 0.63);
+        assert_eq!(BlurUniforms::copy([8.0, 8.0]).with_row_mask(None).row_mask_count, 0);
+    }
 
     #[test]
     fn downsampled_dimensions_cover_odd_edges() {

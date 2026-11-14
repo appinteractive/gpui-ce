@@ -109,8 +109,55 @@ pub mod blur {
         pub saturation: f32,
         pub brightness: f32,
         pub padding0: u32,
+        /// Per-row coverage of the composite (`gpui::BackdropRowMask`): window y of sample 0
+        /// and the distance between samples, device pixels; `row_mask_count` 0 means none.
+        pub row_mask_origin: f32,
+        pub row_mask_step: f32,
+        pub row_mask_count: u32,
+        pub padding1: u32,
+        /// The samples, four per vector.
+        pub row_mask: [Vec4f; 16],
     }
     uniform!(group(1), binding(0), BLUR_LOCALS: BlurUniforms);
+
+    /// Sample `index` of the row mask.
+    pub fn row_mask_sample(index: u32) -> f32 {
+        let samples = get!(BLUR_LOCALS).row_mask[(index / 4u32) as usize];
+        let component = index % 4u32;
+        let mut value = samples.x;
+        if component == 1u32 {
+            value = samples.y;
+        }
+        if component == 2u32 {
+            value = samples.z;
+        }
+        if component == 3u32 {
+            value = samples.w;
+        }
+        value
+    }
+
+    /// Coverage of the row mask at window row `y`: linear between samples, held at both ends.
+    pub fn row_mask_alpha(y: f32) -> f32 {
+        let count = get!(BLUR_LOCALS).row_mask_count;
+        if count == 0u32 {
+            return 1.0;
+        }
+        let last = count - 1u32;
+        let position = clamp(
+            (y - get!(BLUR_LOCALS).row_mask_origin) / get!(BLUR_LOCALS).row_mask_step,
+            0.0,
+            last as f32,
+        );
+        let lower = floor(position);
+        let lower_index = lower as u32;
+        let upper_index = min(lower_index + 1u32, last);
+        mix(
+            row_mask_sample(lower_index),
+            row_mask_sample(upper_index),
+            position - lower,
+        )
+    }
     texture!(group(1), binding(1), BLUR_TEXTURE: Texture2D<f32>);
     sampler!(group(1), binding(2), BLUR_SAMPLER: Sampler);
 
@@ -259,8 +306,9 @@ pub mod blur {
             )),
             get!(BLUR_LOCALS).composite_clip == BlurCompositeClip::RoundedBounds,
         );
-        let faded_coverage =
-            coverage * ContentMask::alpha(get!(BLUR_LOCALS).content_mask, input.position.xy());
+        let faded_coverage = coverage
+            * ContentMask::alpha(get!(BLUR_LOCALS).content_mask, input.position.xy())
+            * row_mask_alpha(input.position.y);
         blur_composite_color(input.position.xy(), faded_coverage)
     }
 
@@ -329,8 +377,9 @@ pub mod blur {
             )),
             get!(BLUR_LOCALS).composite_clip == BlurCompositeClip::RoundedBounds,
         );
-        let faded_coverage =
-            coverage * ContentMask::alpha(get!(BLUR_LOCALS).content_mask, input.position.xy());
+        let faded_coverage = coverage
+            * ContentMask::alpha(get!(BLUR_LOCALS).content_mask, input.position.xy())
+            * row_mask_alpha(input.position.y);
         blur_composite_color(input.position.xy(), faded_coverage)
     }
 }

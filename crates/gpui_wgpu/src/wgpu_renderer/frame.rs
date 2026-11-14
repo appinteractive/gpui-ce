@@ -445,6 +445,7 @@ impl<'a> FrameEncoder<'a> {
                                 saturation,
                                 brightness,
                                 clip: FilterCompositeClip::RoundedBounds,
+                                row_mask: filter.row_mask,
                             },
                         );
                     }
@@ -510,6 +511,7 @@ impl<'a> FrameEncoder<'a> {
                             saturation,
                             brightness,
                             clip: FilterCompositeClip::ContentShape,
+                            row_mask: None,
                         },
                     );
                     pass = begin_scene_render_pass(

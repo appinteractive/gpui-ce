@@ -4,7 +4,7 @@
 #![cfg(feature = "test-support")]
 
 use gpui::{
-    AtlasKey, AtlasTile, BackdropFilter, BorderStyle, Bounds, ColorSpace, ContentMask, Corners,
+    AtlasKey, AtlasTile, BackdropFilter, BackdropRowMask, BorderStyle, Bounds, ColorSpace, ContentMask, Corners,
     DevicePixels, Edges, FilterBoundary, Hsla, MonochromeSprite, PlatformHeadlessRenderer, Point,
     PolychromeSprite, Quad, RenderImageParams, RenderSvgParams, ScaledFilter, ScaledPixels, Scene,
     ShaderBool, Shadow, Size, Underline, checkerboard, linear_color_stop, linear_gradient,
@@ -445,6 +445,7 @@ fn smoothed_primitives_share_one_contour() {
         corner_smoothing: 1.0,
         filters: smallvec![ScaledFilter::Blur(ScaledPixels(5.0))],
         opacity: 1.0,
+        row_mask: None,
     });
 
     scene.finish();
@@ -602,6 +603,7 @@ fn backdrop_chain_pixel(color: u32, filters: &[ScaledFilter]) -> [u8; 4] {
         corner_smoothing: 0.0,
         filters: filters.iter().copied().collect(),
         opacity: 1.0,
+        row_mask: None,
     });
     scene.finish();
     let image = renderer
@@ -685,6 +687,7 @@ fn backdrop_color_stages_at_one_match_blur_alone() {
             corner_smoothing: 0.0,
             filters: filters.iter().copied().collect(),
             opacity: 1.0,
+            row_mask: None,
         });
         scene.finish();
         renderer
@@ -807,6 +810,7 @@ fn faded_backdrop_contrast(rows: &[u32]) -> Vec<f32> {
         // The kernel runs on the half-resolution copy, so 4 px is about a 4 px deviation here.
         filters: smallvec![ScaledFilter::Blur(ScaledPixels(4.0))],
         opacity: 1.0,
+        row_mask: None,
     });
     scene.finish();
     let image = renderer
@@ -852,4 +856,76 @@ fn backdrop_composite_fades_with_the_content_mask() {
         at(77) > at(42) + 0.5 * unblurred,
         "the fade must ramp over the bottom rows: {contrast:?}"
     );
+}
+
+/// Stripes under a backdrop blur whose composite follows a row mask. Returns the red-channel
+/// contrast between a warm and a cool stripe for every row of the 100 px target.
+fn row_masked_backdrop_contrast(row_mask: Option<BackdropRowMask>) -> Vec<f32> {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let mut scene = Scene::default();
+    let warm: Hsla = gpui::rgb_to_hsla(gpui::rgb(0xc83c3c));
+    let cool: Hsla = gpui::rgb_to_hsla(gpui::rgb(0x1e78dc));
+    for stripe in 0..52 {
+        scene.insert_primitive(Quad {
+            bounds: bounds(stripe as f32 * 6.0, 0.0, 6.0, 100.0),
+            content_mask: full_mask(),
+            background: solid_background(if stripe % 2 == 0 { warm } else { cool }),
+            ..Default::default()
+        });
+    }
+    let filter_bounds = bounds(50.0, 0.0, 200.0, 100.0);
+    scene.insert_primitive(BackdropFilter {
+        order: 0,
+        bounds: filter_bounds,
+        content_mask: ContentMask {
+            bounds: filter_bounds,
+            fade_out: Edges::default(),
+        },
+        corner_radii: Corners::default(),
+        corner_smoothing: 0.0,
+        filters: smallvec![ScaledFilter::Blur(ScaledPixels(8.0))],
+        opacity: 1.0,
+        row_mask,
+    });
+    scene.finish();
+    let image = renderer
+        .render_scene_to_image(&scene, TARGET)
+        .expect("render must succeed");
+    (0..100)
+        .map(|y| f32::from(image.get_pixel(87, y).0[0]) - f32::from(image.get_pixel(93, y).0[0]))
+        .collect()
+}
+
+#[test]
+fn backdrop_composite_follows_the_row_mask() {
+    let samples = [1.0, 1.0, 0.25, 0.75, 0.0];
+    let mask = BackdropRowMask::new(ScaledPixels(20.0), ScaledPixels(10.0), &samples).unwrap();
+    let masked = row_masked_backdrop_contrast(Some(mask));
+    let sharp = 200.0 - 30.0;
+    let blurred = row_masked_backdrop_contrast(None);
+    // Coverage read back from the contrast: 1 where the composite is the blur alone, 0 where
+    // the sharp stripes show.
+    for y in [10usize, 25, 33, 38, 41, 45, 52, 57, 63, 80] {
+        let expected = mask.alpha_at(y as f32 + 0.5);
+        let read = (sharp - masked[y]) / (sharp - blurred[y]);
+        assert!(
+            (read - expected).abs() < 0.02,
+            "row {y}: coverage {read:.3}, mask {expected:.3} (contrast {}, blurred {})",
+            masked[y],
+            blurred[y]
+        );
+    }
+}
+
+#[test]
+fn row_mask_is_linear_between_samples_and_held_at_the_ends() {
+    let mask = BackdropRowMask::new(ScaledPixels(20.0), ScaledPixels(10.0), &[0.5, 1.0, 0.0]).unwrap();
+    assert_eq!(mask.alpha_at(0.0), 0.5);
+    assert_eq!(mask.alpha_at(25.0), 0.75);
+    assert_eq!(mask.alpha_at(35.0), 0.5);
+    assert_eq!(mask.alpha_at(90.0), 0.0);
+    assert!(BackdropRowMask::new(ScaledPixels(0.0), ScaledPixels(0.0), &[1.0]).is_none());
+    assert!(BackdropRowMask::new(ScaledPixels(0.0), ScaledPixels(1.0), &[]).is_none());
+    let clamped = BackdropRowMask::new(ScaledPixels(0.0), ScaledPixels(1.0), &[2.0, -1.0, f32::NAN]).unwrap();
+    assert_eq!(&clamped.alphas[..3], &[1.0, 0.0, 1.0]);
 }
