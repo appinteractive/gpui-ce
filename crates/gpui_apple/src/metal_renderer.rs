@@ -3,9 +3,10 @@ use anyhow::Result;
 use block::ConcreteBlock;
 use core_graphics::geometry::CGSize;
 use gpui::{
-    AtlasTextureId, Bounds, ContentMask, Corners, DevicePixels, Edges, FilterRenderTarget,
-    MAX_FILTER_GROUP_DEPTH, MonochromeSprite, PaintSurface, Path, PolychromeSprite, PrimitiveBatch,
-    Quad, RenderCommand, ScaledPixels, Scene, Shadow, Size, SurfaceSource, Underline, size,
+    AtlasTextureId, BackdropRowMask, Bounds, ContentMask, Corners, DevicePixels, Edges,
+    FilterRenderTarget, MAX_FILTER_GROUP_DEPTH, MonochromeSprite, PaintSurface, Path,
+    PolychromeSprite, PrimitiveBatch, Quad, RenderCommand, ScaledPixels, Scene, Shadow, Size,
+    SurfaceSource, Underline, size,
 };
 use gpui_render::{
     TargetStack,
@@ -1074,6 +1075,7 @@ impl MetalRenderer {
                                 filter.opacity,
                                 filter.color_adjustment(),
                                 true,
+                                filter.row_mask.as_ref(),
                             );
                         }
                     }
@@ -1132,6 +1134,7 @@ impl MetalRenderer {
                         boundary.opacity,
                         boundary.color_adjustment(),
                         false,
+                        None,
                     );
                     command_encoder = new_command_encoder_for_texture(
                         command_buffer,
@@ -1289,6 +1292,8 @@ impl MetalRenderer {
         (saturation, brightness): (f32, f32),
         // Backdrop clips to the rounded rect; content (`filter`) bleeds past its bounds.
         clip_rounded: bool,
+        // Per-row coverage of a backdrop composite; content filters and snapshots pass `None`.
+        row_mask: Option<&BackdropRowMask>,
     ) {
         if clip_rounded && blur_radius <= 0.0 {
             return;
@@ -1378,7 +1383,8 @@ impl MetalRenderer {
             clip,
             source_size,
             full_size,
-        );
+        )
+        .with_row_mask(row_mask);
         let encoder = new_command_encoder_for_texture(
             command_buffer,
             target,
@@ -1457,6 +1463,7 @@ impl MetalRenderer {
                 1.0,
                 (1.0, 1.0),
                 false,
+                None,
             );
         }
     }
