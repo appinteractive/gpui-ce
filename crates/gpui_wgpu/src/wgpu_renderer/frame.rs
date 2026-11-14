@@ -423,6 +423,16 @@ impl<'a> FrameEncoder<'a> {
                 RenderCommand::Batch(PrimitiveBatch::BackdropFilters(range)) => {
                     drop(pass);
                     for filter in &self.scene.backdrop_filters[range.clone()] {
+                        if let Some(conversion) = filter.color_conversion {
+                            self.renderer.convert_backdrop(
+                                &mut self.encoder,
+                                self.targets.current(),
+                                filter.bounds,
+                                filter.content_mask,
+                                conversion,
+                            );
+                            continue;
+                        }
                         let snapshot = self.targets.inherits_backdrop().then(|| {
                             self.renderer.snapshot_backdrop(
                                 &mut self.encoder,

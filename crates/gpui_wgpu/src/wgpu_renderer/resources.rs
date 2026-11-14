@@ -304,8 +304,8 @@ impl WgpuRenderer {
             resources.blur_pong_view = Some(view);
         }
 
-        if requirements.backdrop_filter_count > 0
-            && requirements.isolated_target_count > 0
+        if (requirements.uses_backdrop_conversion
+            || requirements.backdrop_filter_count > 0 && requirements.isolated_target_count > 0)
             && resources.backdrop_snapshot_texture.is_none()
         {
             let (texture, view) = sampled_render_texture(&resources.device, format, width, height);

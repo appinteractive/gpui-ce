@@ -108,7 +108,9 @@ pub mod blur {
         pub corner_smoothing: f32,
         pub saturation: f32,
         pub brightness: f32,
-        pub padding0: u32,
+        /// Colour conversion of the copy pass (`gpui::BackdropColorConversion`): 0 none,
+        /// 1 sRGB to Display P3, 2 Display P3 to sRGB. Only `DownsampleMode::Copy` applies it.
+        pub color_conversion: u32,
         /// Per-row coverage of the composite (`gpui::BackdropRowMask`): window y of sample 0
         /// and the distance between samples, device pixels; `row_mask_count` 0 means none.
         pub row_mask_origin: f32,
@@ -278,6 +280,24 @@ pub mod blur {
         }
     }
 
+    /// Converts a premultiplied colour between sRGB- and Display P3-encoded values
+    /// (`color_conversion`): un-premultiply, decode, change primaries, clip to 0..1, encode,
+    /// premultiply.
+    pub fn convert_color(color: Vec4f) -> Vec4f {
+        let mode = get!(BLUR_LOCALS).color_conversion;
+        if mode == 0u32 || color.w <= 0.0 {
+            return color;
+        }
+        let encoded = saturate(vec3f(color.x, color.y, color.z) / color.w);
+        let linear = srgb_to_linear(encoded);
+        let mut converted = LINEAR_SRGB_TO_DISPLAY_P3 * linear;
+        if mode == 2u32 {
+            converted = LINEAR_DISPLAY_P3_TO_SRGB * linear;
+        }
+        let result = linear_to_srgb(saturate(converted)) * color.w;
+        vec4f(result.x, result.y, result.z, color.w)
+    }
+
     #[fragment]
     pub fn fragment_blur_downsample(input: BlurVarying) -> Vec4f {
         if get!(BLUR_LOCALS).downsample_mode == DownsampleMode::HalfResolution {
@@ -288,7 +308,12 @@ pub mod blur {
             );
             return texture_sample_level(BLUR_TEXTURE, BLUR_SAMPLER, source_coordinates, 0.0);
         }
-        texture_sample_level(BLUR_TEXTURE, BLUR_SAMPLER, input.texture_coordinates, 0.0)
+        convert_color(texture_sample_level(
+            BLUR_TEXTURE,
+            BLUR_SAMPLER,
+            input.texture_coordinates,
+            0.0,
+        ))
     }
 
     pub fn sample_blur_texture(texture_coordinates: Vec2f) -> Vec4f {

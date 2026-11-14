@@ -8,11 +8,11 @@ use anyhow::Result;
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use gpui::{
-    AnyWindowHandle, BackgroundExecutor, Bounds, Capslock, CursorStyle, ExternalDragPayload,
-    ExternalPaths, FileDropEvent, ForegroundExecutor, KeyDownEvent, Keystroke, Modifiers,
-    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
-    PromptButton, PromptLevel, RequestFrameOptions, SharedString, Size, SystemWindowTab,
+    AnyWindowHandle, BackgroundExecutor, Bounds, Capslock, CursorStyle, DisplayColorSpace,
+    ExternalDragPayload, ExternalPaths, FileDropEvent, ForegroundExecutor, KeyDownEvent, Keystroke,
+    Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
+    Point, PromptButton, PromptLevel, RequestFrameOptions, SharedString, Size, SystemWindowTab,
     WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowKind,
     WindowParams, point, px, size,
 };
@@ -1676,6 +1676,41 @@ impl PlatformWindow for MacWindow {
                 return None;
             }
             Some(Rc::new(MacDisplay(display_id_for_screen(screen)?)))
+        }
+    }
+
+    /// The window's screen (the main screen while it has none, as an off-screen window does),
+    /// classified by where `NSColor`'s sRGB red lands in the screen's `colorSpace`.
+    fn display_color_space(&self) -> DisplayColorSpace {
+        unsafe {
+            let mut screen: ObjcId = msg_send![self.0.lock().native_window, screen];
+            if screen.is_null() {
+                screen = msg_send![class!(NSScreen), mainScreen];
+            }
+            if screen.is_null() {
+                return DisplayColorSpace::Srgb;
+            }
+            let space: ObjcId = msg_send![screen, colorSpace];
+            if space.is_null() {
+                return DisplayColorSpace::Srgb;
+            }
+            let red: ObjcId = msg_send![
+                class!(NSColor),
+                colorWithSRGBRed: 1.0f64,
+                green: 0.0f64,
+                blue: 0.0f64,
+                alpha: 1.0f64
+            ];
+            let converted: ObjcId = msg_send![red, colorUsingColorSpace: space];
+            if converted.is_null() {
+                return DisplayColorSpace::Srgb;
+            }
+            let components: [f64; 3] = [
+                msg_send![converted, redComponent],
+                msg_send![converted, greenComponent],
+                msg_send![converted, blueComponent],
+            ];
+            DisplayColorSpace::from_srgb_red(components)
         }
     }
 

@@ -4,11 +4,11 @@
 #![cfg(feature = "test-support")]
 
 use gpui::{
-    AtlasKey, AtlasTile, BackdropFilter, BackdropRowMask, BorderStyle, Bounds, ColorSpace, ContentMask, Corners,
-    DevicePixels, Edges, FilterBoundary, Hsla, MonochromeSprite, PlatformHeadlessRenderer, Point,
-    PolychromeSprite, Quad, RenderImageParams, RenderSvgParams, ScaledFilter, ScaledPixels, Scene,
-    ShaderBool, Shadow, Size, Underline, checkerboard, linear_color_stop, linear_gradient,
-    solid_background,
+    AtlasKey, AtlasTile, BackdropColorConversion, BackdropFilter, BackdropRowMask, BorderStyle,
+    Bounds, ColorSpace, ContentMask, Corners, DevicePixels, Edges, FilterBoundary, Hsla,
+    MonochromeSprite, PlatformHeadlessRenderer, Point, PolychromeSprite, Quad, RenderImageParams,
+    RenderSvgParams, ScaledFilter, ScaledPixels, Scene, ShaderBool, Shadow, Size, Underline,
+    checkerboard, linear_color_stop, linear_gradient, solid_background,
 };
 use gpui_ce_wgpu::WgpuHeadlessRenderer;
 use smallvec::smallvec;
@@ -446,6 +446,7 @@ fn smoothed_primitives_share_one_contour() {
         filters: smallvec![ScaledFilter::Blur(ScaledPixels(5.0))],
         opacity: 1.0,
         row_mask: None,
+        color_conversion: None,
     });
 
     scene.finish();
@@ -604,6 +605,7 @@ fn backdrop_chain_pixel(color: u32, filters: &[ScaledFilter]) -> [u8; 4] {
         filters: filters.iter().copied().collect(),
         opacity: 1.0,
         row_mask: None,
+        color_conversion: None,
     });
     scene.finish();
     let image = renderer
@@ -688,6 +690,7 @@ fn backdrop_color_stages_at_one_match_blur_alone() {
             filters: filters.iter().copied().collect(),
             opacity: 1.0,
             row_mask: None,
+            color_conversion: None,
         });
         scene.finish();
         renderer
@@ -811,6 +814,7 @@ fn faded_backdrop_contrast(rows: &[u32]) -> Vec<f32> {
         filters: smallvec![ScaledFilter::Blur(ScaledPixels(4.0))],
         opacity: 1.0,
         row_mask: None,
+        color_conversion: None,
     });
     scene.finish();
     let image = renderer
@@ -886,6 +890,7 @@ fn row_masked_backdrop_contrast(row_mask: Option<BackdropRowMask>) -> Vec<f32> {
         filters: smallvec![ScaledFilter::Blur(ScaledPixels(8.0))],
         opacity: 1.0,
         row_mask,
+        color_conversion: None,
     });
     scene.finish();
     let image = renderer
@@ -919,14 +924,16 @@ fn backdrop_composite_follows_the_row_mask() {
 
 #[test]
 fn row_mask_is_linear_between_samples_and_held_at_the_ends() {
-    let mask = BackdropRowMask::new(ScaledPixels(20.0), ScaledPixels(10.0), &[0.5, 1.0, 0.0]).unwrap();
+    let mask =
+        BackdropRowMask::new(ScaledPixels(20.0), ScaledPixels(10.0), &[0.5, 1.0, 0.0]).unwrap();
     assert_eq!(mask.alpha_at(0.0), 0.5);
     assert_eq!(mask.alpha_at(25.0), 0.75);
     assert_eq!(mask.alpha_at(35.0), 0.5);
     assert_eq!(mask.alpha_at(90.0), 0.0);
     assert!(BackdropRowMask::new(ScaledPixels(0.0), ScaledPixels(0.0), &[1.0]).is_none());
     assert!(BackdropRowMask::new(ScaledPixels(0.0), ScaledPixels(1.0), &[]).is_none());
-    let clamped = BackdropRowMask::new(ScaledPixels(0.0), ScaledPixels(1.0), &[2.0, -1.0, f32::NAN]).unwrap();
+    let clamped =
+        BackdropRowMask::new(ScaledPixels(0.0), ScaledPixels(1.0), &[2.0, -1.0, f32::NAN]).unwrap();
     assert_eq!(&clamped.alphas[..3], &[1.0, 0.0, 1.0]);
 }
 
@@ -958,6 +965,7 @@ fn row_striped_backdrop_column(row_mask: Option<BackdropRowMask>) -> Vec<f32> {
         filters: smallvec![ScaledFilter::Blur(ScaledPixels(0.02))],
         opacity: 1.0,
         row_mask,
+        color_conversion: None,
     });
     scene.finish();
     let image = renderer
@@ -1002,5 +1010,112 @@ fn premultiplied_row_mask_weights_source_texel_rows() {
     assert!(
         largest_difference > 8.0,
         "premultiplied and output-pixel masks must differ on row stripes, by {largest_difference}"
+    );
+}
+
+/// Colour columns 10 px wide over the whole target, and in-place conversions of rows 10..50
+/// (bounds at fractional y, so both conversions must round to the same pixel rows).
+const CONVERSION_COLUMNS: [[u8; 3]; 11] = [
+    [0, 0, 0],
+    [64, 64, 64],
+    [128, 128, 128],
+    [192, 192, 192],
+    [255, 255, 255],
+    [255, 0, 0],
+    [0, 255, 0],
+    [0, 0, 255],
+    [255, 255, 0],
+    [255, 0, 255],
+    [34, 39, 42],
+];
+
+fn converted_columns(conversions: &[BackdropColorConversion]) -> image::RgbaImage {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let mut scene = Scene::default();
+    for (index, [r, g, b]) in CONVERSION_COLUMNS.into_iter().enumerate() {
+        let colour = gpui::rgb_to_hsla(gpui::rgb(u32::from_be_bytes([0, r, g, b])));
+        scene.insert_primitive(Quad {
+            bounds: bounds(index as f32 * 10.0, 0.0, 10.0, 100.0),
+            content_mask: full_mask(),
+            background: solid_background(colour),
+            ..Default::default()
+        });
+    }
+    let region = bounds(0.0, 10.4, 300.0, 39.8);
+    for conversion in conversions {
+        scene.insert_primitive(BackdropFilter {
+            bounds: region,
+            content_mask: full_mask(),
+            color_conversion: Some(*conversion),
+            ..Default::default()
+        });
+    }
+    scene.finish();
+    renderer
+        .render_scene_to_image(&scene, TARGET)
+        .expect("render must succeed")
+}
+
+#[test]
+fn backdrop_conversion_reaches_display_p3_and_back() {
+    let one_way = converted_columns(&[BackdropColorConversion::SrgbToDisplayP3]);
+    let round_trip = converted_columns(&[
+        BackdropColorConversion::SrgbToDisplayP3,
+        BackdropColorConversion::DisplayP3ToSrgb,
+    ]);
+    let pixel = |image: &image::RgbaImage, column: usize, y: u32| {
+        let p = image.get_pixel(column as u32 * 10 + 5, y).0;
+        [p[0], p[1], p[2]]
+    };
+    for (column, colour) in CONVERSION_COLUMNS.into_iter().enumerate() {
+        // Outside the region nothing changes, on both sides of the rounded edges.
+        for y in [0, 9, 50, 99] {
+            assert_eq!(
+                pixel(&one_way, column, y),
+                colour,
+                "column {column} row {y} must be untouched"
+            );
+        }
+        // The target keeps 8 bits between the two conversions: greys (and the near-grey window
+        // colour) come back exactly, saturated colours within a few levels (pure green reads
+        // 3, 255, 0, as the analytic model of the two roundings predicts).
+        let grey = colour[0] == colour[1] && colour[1] == colour[2];
+        for y in [10, 30, 49] {
+            let back = pixel(&round_trip, column, y);
+            if grey || column == 10 {
+                assert_eq!(back, colour, "column {column} row {y}: round trip");
+            } else {
+                let worst = back
+                    .iter()
+                    .zip(colour)
+                    .map(|(a, b)| a.abs_diff(b))
+                    .max()
+                    .unwrap();
+                assert!(
+                    worst <= 3,
+                    "column {column} row {y}: round trip reads {back:?}"
+                );
+            }
+        }
+        if grey {
+            assert_eq!(
+                pixel(&one_way, column, 30),
+                colour,
+                "greys convert to themselves"
+            );
+        }
+    }
+    // sRGB red in Display P3 (FIT.md: the display profile reads 234, 51, 35).
+    let red = pixel(&one_way, 5, 30);
+    for (got, expected) in red.iter().zip([234u8, 51, 35]) {
+        assert!(
+            got.abs_diff(expected) <= 1,
+            "sRGB red in Display P3 reads {red:?}"
+        );
+    }
+    assert_eq!(
+        pixel(&one_way, 10, 30),
+        [35, 39, 42],
+        "the dark window colour in Display P3"
     );
 }

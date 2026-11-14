@@ -1,11 +1,11 @@
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AtlasTile, AvailableSpace, BackdropFilter,
-    BackdropRowMask, Background, BorderStyle, Bounds,
-    BoxShadow, Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
-    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
-    EntityId, EventEmitter, FileDropEvent, Filter, FilterBoundary, FontId, Global, GlobalElementId,
-    GlyphId, GlyphRenderMode, GpuSpecs, InputHandler, IntoElement, IsZero, KeyBinding, KeyContext,
+    AsyncWindowContext, AtlasTile, AvailableSpace, BackdropColorConversion, BackdropFilter,
+    BackdropRowMask, Background, BorderStyle, Bounds, BoxShadow, Capslock, Context, Corners,
+    CursorHideMode, CursorStyle, Decorations, DevicePixels, DispatchActionListener, DispatchNodeId,
+    DispatchTree, DisplayColorSpace, DisplayId, Edges, Effect, Entity, EntityId, EventEmitter,
+    FileDropEvent, Filter, FilterBoundary, FontId, Global, GlobalElementId, GlyphId,
+    GlyphRenderMode, GpuSpecs, InputHandler, IntoElement, IsZero, KeyBinding, KeyContext,
     KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId, Lerp, LineLayoutIndex, Modifiers,
     ModifiersChangedEvent, MonochromeSprite, Motion, MouseButton, MouseEvent, MouseMoveEvent,
     MouseUpEvent, PaintSurface, Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
@@ -2845,6 +2845,12 @@ impl Window {
         self.appearance
     }
 
+    /// Returns the colour space the system composites this window in, read from the platform
+    /// on every call (the window may have moved to another screen). See [`DisplayColorSpace`].
+    pub fn display_color_space(&self) -> DisplayColorSpace {
+        self.platform_window.display_color_space()
+    }
+
     /// Returns the size of the drawable area within the window.
     pub fn viewport_size(&self) -> Size<Pixels> {
         self.viewport_size
@@ -4669,6 +4675,38 @@ impl Window {
             filters,
             opacity: 1.0,
             row_mask,
+            color_conversion: None,
+        });
+    }
+
+    /// Converts the colours already painted under `bounds` in place, at the current z-index:
+    /// see [`BackdropColorConversion`]. Paint one before drawing that has to blend in another
+    /// space and its [`BackdropColorConversion::inverse`] after it, with the same `bounds`, both
+    /// outside any opacity group of that drawing (inside one, the conversion would act on the
+    /// group's own layer). The region is `bounds` clipped to the content mask, rounded to whole
+    /// device pixels, so a pair with the same bounds covers the same pixels.
+    ///
+    /// Only the wgpu renderer converts; Metal and DirectX skip the primitive, so a caller that
+    /// converts its own fill colours should do so only where [`Window::display_color_space`]
+    /// asks for it and the wgpu renderer is in use.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_backdrop_color_conversion(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        conversion: BackdropColorConversion,
+    ) {
+        self.invalidator.debug_assert_paint();
+        self.next_frame.scene.insert_primitive(BackdropFilter {
+            order: 0,
+            bounds: self.snap_bounds(bounds),
+            content_mask: self.snapped_content_mask(),
+            corner_radii: Corners::default(),
+            corner_smoothing: 0.0,
+            filters: SmallVec::new(),
+            opacity: 1.0,
+            row_mask: None,
+            color_conversion: Some(conversion),
         });
     }
 

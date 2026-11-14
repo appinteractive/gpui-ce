@@ -879,6 +879,92 @@ pub struct BackdropFilter {
     pub opacity: f32,
     /// Optional per-row coverage of the composite, multiplied with the content mask's.
     pub row_mask: Option<BackdropRowMask>,
+    /// When set, the primitive is a colour conversion of the backdrop in place instead of a
+    /// filter composite: the pixels under `bounds` (clipped to the content mask, whole device
+    /// pixels) are replaced by their converted values, and `filters`, `opacity`, the corner
+    /// radii and `row_mask` are ignored. See [`BackdropColorConversion`].
+    pub color_conversion: Option<BackdropColorConversion>,
+}
+
+/// An in-place colour conversion of the backdrop, emitted by
+/// [`crate::Window::paint_backdrop_color_conversion`]. A pair of them brackets drawing that has
+/// to blend in another space than GPUI's sRGB-encoded values: convert the region into that
+/// space, draw (blurs, fills and gradients then mix the converted values), convert back.
+///
+/// The conversion is between encoded values: un-premultiply, decode the transfer function,
+/// change primaries, clamp to 0..1 (out-of-gamut values clip), encode, premultiply again. Display
+/// P3 and sRGB share the transfer function and the white point, so greys convert to themselves.
+/// The target keeps 8 bits per channel, so a round trip moves saturated colours by up to
+/// several levels; the bracket should cover only the pixels the drawing changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BackdropColorConversion {
+    /// sRGB-encoded values to Display P3-encoded values.
+    SrgbToDisplayP3,
+    /// Display P3-encoded values back to sRGB-encoded values, clipping colours outside sRGB.
+    DisplayP3ToSrgb,
+}
+
+impl BackdropColorConversion {
+    /// The conversion into `space` from sRGB, or `None` when `space` is sRGB.
+    pub fn into_space(space: crate::DisplayColorSpace) -> Option<Self> {
+        match space {
+            crate::DisplayColorSpace::Srgb => None,
+            crate::DisplayColorSpace::DisplayP3 => Some(Self::SrgbToDisplayP3),
+        }
+    }
+
+    /// The conversion that undoes this one.
+    pub fn inverse(self) -> Self {
+        match self {
+            Self::SrgbToDisplayP3 => Self::DisplayP3ToSrgb,
+            Self::DisplayP3ToSrgb => Self::SrgbToDisplayP3,
+        }
+    }
+
+    /// Converts one colour (encoded components in 0..1, alpha untouched), as the renderer does
+    /// per pixel. Lets callers convert fill colours they draw inside a bracket.
+    pub fn convert(self, rgb: [f32; 3]) -> [f32; 3] {
+        let matrix = match self {
+            Self::SrgbToDisplayP3 => &SRGB_TO_DISPLAY_P3,
+            Self::DisplayP3ToSrgb => &DISPLAY_P3_TO_SRGB,
+        };
+        let linear = rgb.map(srgb_transfer_decode);
+        let converted: [f32; 3] = std::array::from_fn(|row| {
+            (matrix[row][0] * linear[0] + matrix[row][1] * linear[1] + matrix[row][2] * linear[2])
+                .clamp(0.0, 1.0)
+        });
+        converted.map(srgb_transfer_encode)
+    }
+}
+
+/// Linear sRGB to linear Display P3 (row-major; both D65).
+pub const SRGB_TO_DISPLAY_P3: [[f32; 3]; 3] = [
+    [0.822_462_1, 0.177_538, 0.0],
+    [0.033_194_1, 0.966_805_8, 0.0],
+    [0.017_082_7, 0.072_397_4, 0.910_519_9],
+];
+
+/// Linear Display P3 to linear sRGB (row-major), the inverse of [`SRGB_TO_DISPLAY_P3`].
+pub const DISPLAY_P3_TO_SRGB: [[f32; 3]; 3] = [
+    [1.224_94, -0.224_940_1, 0.0],
+    [-0.042_056_82, 1.042_056_9, 0.0],
+    [-0.019_637_657, -0.078_635_98, 1.098_273_6],
+];
+
+fn srgb_transfer_decode(value: f32) -> f32 {
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn srgb_transfer_encode(value: f32) -> f32 {
+    if value <= 0.003_130_8 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    }
 }
 
 /// The most samples a [`BackdropRowMask`] holds.
@@ -914,7 +1000,11 @@ impl BackdropRowMask {
         let mut alphas = [0.0; BACKDROP_ROW_MASK_SAMPLES];
         let count = samples.len().min(BACKDROP_ROW_MASK_SAMPLES);
         for (slot, sample) in alphas.iter_mut().zip(samples) {
-            *slot = if sample.is_nan() { 1.0 } else { sample.clamp(0.0, 1.0) };
+            *slot = if sample.is_nan() {
+                1.0
+            } else {
+                sample.clamp(0.0, 1.0)
+            };
         }
         Some(Self {
             origin,
@@ -1395,6 +1485,55 @@ impl PathVertex<Pixels> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_conversion_keeps_greys_and_moves_red_into_display_p3() {
+        let to_p3 = BackdropColorConversion::SrgbToDisplayP3;
+        for grey in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let converted = to_p3.convert([grey; 3]);
+            assert!(
+                converted.iter().all(|c| (c - grey).abs() < 1e-5),
+                "{grey}: {converted:?}"
+            );
+        }
+        let red = to_p3.convert([1.0, 0.0, 0.0]).map(|c| (c * 255.0).round());
+        assert_eq!(red, [234.0, 51.0, 35.0]);
+        let back = to_p3.inverse().convert(to_p3.convert([0.2, 0.6, 0.9]));
+        assert!(
+            back.iter()
+                .zip([0.2, 0.6, 0.9])
+                .all(|(a, b)| (a - b).abs() < 1e-4),
+            "{back:?}"
+        );
+        // Out of sRGB's gamut: P3 green clips.
+        assert_eq!(to_p3.inverse().convert([0.0, 1.0, 0.0])[0], 0.0);
+        assert_eq!(
+            BackdropColorConversion::into_space(crate::DisplayColorSpace::Srgb),
+            None
+        );
+        assert_eq!(
+            BackdropColorConversion::into_space(crate::DisplayColorSpace::DisplayP3),
+            Some(to_p3)
+        );
+    }
+
+    #[test]
+    fn screens_classify_by_where_srgb_red_lands() {
+        use crate::DisplayColorSpace;
+        assert_eq!(
+            DisplayColorSpace::from_srgb_red([234.0 / 255.0, 51.0 / 255.0, 35.0 / 255.0]),
+            DisplayColorSpace::DisplayP3
+        );
+        assert_eq!(
+            DisplayColorSpace::from_srgb_red([1.0, 0.0, 0.0]),
+            DisplayColorSpace::Srgb
+        );
+        // Adobe RGB puts sRGB red at about (0.859, 0.0, 0.0): not P3, so no conversion.
+        assert_eq!(
+            DisplayColorSpace::from_srgb_red([0.859, 0.0, 0.0]),
+            DisplayColorSpace::Srgb
+        );
+    }
     use crate::{AtlasTextureKind, DevicePixels, Point, ShaderBool, Size, SurfaceSource, TileId};
 
     fn scaled(value: f32) -> ScaledPixels {

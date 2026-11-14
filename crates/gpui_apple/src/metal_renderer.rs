@@ -1043,6 +1043,11 @@ impl MetalRenderer {
                         (blur_ping_owned.as_deref(), blur_pong_owned.as_deref())
                     {
                         for filter in &scene.backdrop_filters[range.clone()] {
+                            // In-place colour conversions are implemented by the wgpu renderer
+                            // only; here they are skipped (the drawing stays in sRGB).
+                            if filter.color_conversion.is_some() {
+                                continue;
+                            }
                             let source = if targets.inherits_backdrop() {
                                 let snapshot = backdrop_snapshot_owned
                                     .as_deref()

@@ -46,6 +46,8 @@ pub struct ScenePlanRequirements {
     pub uses_path_target: bool,
     pub uses_offscreen_target: bool,
     pub uses_blur_target: bool,
+    /// A backdrop colour conversion needs a full-resolution scratch copy of the target.
+    pub uses_backdrop_conversion: bool,
 }
 
 /// A compiled scene command stream, built by [`Scene::finish`] and shared by every renderer.
@@ -128,6 +130,10 @@ impl ScenePlan {
                         requirements.uses_blur_target |= scene.backdrop_filters[range.clone()]
                             .iter()
                             .any(|filter| filter.max_blur_radius() > 0.0);
+                        requirements.uses_backdrop_conversion |= scene.backdrop_filters
+                            [range.clone()]
+                        .iter()
+                        .any(|filter| filter.color_conversion.is_some());
                     }
 
                     requirements.include_batch(&batch);

@@ -53,6 +53,19 @@ mod source {
         vec3f(0.3963377774, -0.1055613458, -0.0894841775),
         vec3f(0.2158037573, -0.0638541728, -1.2914855480),
     );
+    /// Linear sRGB to linear Display P3 (columns; `gpui::SRGB_TO_DISPLAY_P3` is the same
+    /// matrix row-major).
+    pub const LINEAR_SRGB_TO_DISPLAY_P3: Mat3x3f = mat3x3f(
+        vec3f(0.8224621, 0.0331941, 0.0170827),
+        vec3f(0.1775380, 0.9668058, 0.0723974),
+        vec3f(0.0, 0.0, 0.9105199),
+    );
+    /// Linear Display P3 to linear sRGB, the inverse of [`LINEAR_SRGB_TO_DISPLAY_P3`].
+    pub const LINEAR_DISPLAY_P3_TO_SRGB: Mat3x3f = mat3x3f(
+        vec3f(1.22494, -0.04205682, -0.019637657),
+        vec3f(-0.2249401, 1.0420569, -0.07863598),
+        vec3f(0.0, 0.0, 1.0982736),
+    );
     pub const CONE_RESPONSE_TO_LINEAR_SRGB: Mat3x3f = mat3x3f(
         vec3f(4.0767416621, -1.2684380046, -0.0041960863),
         vec3f(-3.3077115913, 2.6097574011, -0.7034186147),

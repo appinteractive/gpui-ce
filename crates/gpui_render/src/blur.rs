@@ -6,9 +6,12 @@ pub use crate::shaders::{
         Edges as ShaderEdges,
     },
 };
-use gpui::{BACKDROP_ROW_MASK_SAMPLES, BackdropRowMask, Bounds, ContentMask, Corners, ScaledPixels};
-use wgsl_rs::std::vec4f;
+use gpui::{
+    BACKDROP_ROW_MASK_SAMPLES, BackdropColorConversion, BackdropRowMask, Bounds, ContentMask,
+    Corners, ScaledPixels,
+};
 use wgsl_rs::std::vec2f;
+use wgsl_rs::std::vec4f;
 
 pub const DOWNSAMPLE_FACTOR: u32 = 2;
 
@@ -139,6 +142,18 @@ impl BlurUniforms {
 }
 
 impl BlurUniforms {
+    /// A full-resolution copy that converts colours (`gpui::BackdropColorConversion`).
+    pub fn color_conversion(size: [f32; 2], conversion: BackdropColorConversion) -> Self {
+        let mut uniforms = Self::copy(size);
+        uniforms.color_conversion = match conversion {
+            BackdropColorConversion::SrgbToDisplayP3 => 1,
+            BackdropColorConversion::DisplayP3ToSrgb => 2,
+        };
+        uniforms
+    }
+}
+
+impl BlurUniforms {
     /// Sets the composite's per-row coverage; `None` leaves it off.
     pub fn with_row_mask(mut self, mask: Option<&BackdropRowMask>) -> Self {
         let Some(mask) = mask else {
@@ -201,6 +216,36 @@ impl ScissorRectangle {
             y: minimum_y,
             width: maximum_x - minimum_x,
             height: maximum_y - minimum_y,
+        }
+    }
+
+    /// The whole device pixels of `bounds` clipped to `clip`, each edge rounded to the nearest
+    /// pixel boundary and kept inside the target. Two calls with the same arguments give the
+    /// same pixels, which a pair of in-place colour conversions relies on.
+    pub fn for_region(
+        bounds: Bounds<ScaledPixels>,
+        clip: Bounds<ScaledPixels>,
+        full_width: u32,
+        full_height: u32,
+    ) -> Self {
+        let edge = |value: f32, maximum: u32| (value.round().max(0.0) as u32).min(maximum);
+        let left = edge(bounds.origin.x.0.max(clip.origin.x.0), full_width);
+        let top = edge(bounds.origin.y.0.max(clip.origin.y.0), full_height);
+        let right = edge(
+            (bounds.origin.x.0 + bounds.size.width.0).min(clip.origin.x.0 + clip.size.width.0),
+            full_width,
+        )
+        .max(left);
+        let bottom = edge(
+            (bounds.origin.y.0 + bounds.size.height.0).min(clip.origin.y.0 + clip.size.height.0),
+            full_height,
+        )
+        .max(top);
+        Self {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
         }
     }
 
@@ -268,7 +313,7 @@ fn empty_uniforms(downsample_mode: DownsampleMode) -> BlurUniforms {
         corner_smoothing: 0.0,
         saturation: 1.0,
         brightness: 1.0,
-        padding0: 0,
+        color_conversion: 0,
         row_mask_origin: 0.0,
         row_mask_step: 1.0,
         row_mask_count: 0,
@@ -295,9 +340,36 @@ mod tests {
         assert_eq!(uniforms.row_mask[0].y, 0.01);
         assert_eq!(uniforms.row_mask[15].w, 0.63);
         assert_eq!(uniforms.row_mask_mode, 0);
-        let premultiplied = BlurUniforms::copy([8.0, 8.0]).with_row_mask(Some(&mask.premultiplied()));
+        let premultiplied =
+            BlurUniforms::copy([8.0, 8.0]).with_row_mask(Some(&mask.premultiplied()));
         assert_eq!(premultiplied.row_mask_mode, 1);
-        assert_eq!(BlurUniforms::copy([8.0, 8.0]).with_row_mask(None).row_mask_count, 0);
+        assert_eq!(
+            BlurUniforms::copy([8.0, 8.0])
+                .with_row_mask(None)
+                .row_mask_count,
+            0
+        );
+    }
+
+    #[test]
+    fn region_scissor_rounds_edges_and_stays_inside() {
+        use super::ScissorRectangle;
+        use gpui::{Bounds, point, size};
+        let bounds = Bounds::new(
+            point(ScaledPixels(-3.0), ScaledPixels(10.4)),
+            size(ScaledPixels(50.0), ScaledPixels(20.2)),
+        );
+        let clip = Bounds::new(
+            point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size(ScaledPixels(40.0), ScaledPixels(100.0)),
+        );
+        let rect = ScissorRectangle::for_region(bounds, clip, 32, 64);
+        assert_eq!((rect.x, rect.y, rect.width, rect.height), (0, 10, 32, 21));
+        let outside = Bounds::new(
+            point(ScaledPixels(50.0), ScaledPixels(0.0)),
+            size(ScaledPixels(5.0), ScaledPixels(5.0)),
+        );
+        assert!(ScissorRectangle::for_region(outside, clip, 32, 64).is_empty());
     }
 
     #[test]

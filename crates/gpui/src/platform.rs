@@ -897,6 +897,10 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn scale_factor(&self) -> f32;
     fn appearance(&self) -> WindowAppearance;
     fn display(&self) -> Option<Rc<dyn PlatformDisplay>>;
+    /// The colour space the system composites this window in. See [`DisplayColorSpace`].
+    fn display_color_space(&self) -> DisplayColorSpace {
+        DisplayColorSpace::Srgb
+    }
     fn mouse_position(&self) -> Point<Pixels>;
     fn modifiers(&self) -> Modifiers;
     fn capslock(&self) -> Capslock;
@@ -2985,6 +2989,39 @@ pub enum WindowAppearance {
     ///
     /// On macOS, this corresponds to the `NSAppearanceNameVibrantDark` appearance.
     VibrantDark,
+}
+
+/// The colour space the operating system composites a window's pixels in, as far as GPUI's
+/// colour stages care. GPUI renders sRGB-encoded values; a compositor working in another
+/// space converts them, and blends done by that compositor (such as macOS's scroll edge
+/// effect) mix in its space, not in sRGB.
+///
+/// On macOS this is the colour space of the window's screen: `DisplayP3` when it is
+/// Display P3 (built-in Retina displays and most recent Apple displays), `Srgb` for an sRGB
+/// screen and for any space GPUI does not model.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DisplayColorSpace {
+    /// sRGB, or a space GPUI has no conversion for.
+    #[default]
+    Srgb,
+    /// Display P3: the P3 primaries with the sRGB white point and transfer function.
+    DisplayP3,
+}
+
+impl DisplayColorSpace {
+    /// Classifies a screen by where pure sRGB red lands in its colour space (encoded components,
+    /// 0..1). Display P3 puts it at about (0.918, 0.200, 0.139); macOS's built-in "Color LCD"
+    /// profiles read (234, 51, 35) / 255. Within 0.02 per channel of that it is `DisplayP3`;
+    /// anything else (sRGB itself, Adobe RGB, Rec. 2020, unknown) is `Srgb`, which leaves the
+    /// drawing in sRGB rather than converting with the wrong primaries.
+    pub fn from_srgb_red(red_in_screen_space: [f64; 3]) -> Self {
+        const DISPLAY_P3_RED: [f64; 3] = [0.917_5, 0.200_3, 0.138_6];
+        let close = red_in_screen_space
+            .iter()
+            .zip(DISPLAY_P3_RED)
+            .all(|(value, expected)| (value - expected).abs() <= 0.02);
+        if close { Self::DisplayP3 } else { Self::Srgb }
+    }
 }
 
 /// The appearance of the background of the window itself, when there is

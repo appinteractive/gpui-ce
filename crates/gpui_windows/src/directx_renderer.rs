@@ -606,6 +606,11 @@ impl DirectXRenderer {
                     let (current_rtv, current_srv) = targets.current();
                     let result = (|| {
                         for filter in &scene.backdrop_filters[range.clone()] {
+                            // In-place colour conversions are implemented by the wgpu renderer
+                            // only; here they are skipped (the drawing stays in sRGB).
+                            if filter.color_conversion.is_some() {
+                                continue;
+                            }
                             let source = if targets.inherits_backdrop() {
                                 self.dx_snapshot_backdrop(
                                     targets.backdrop_layers().map(|(_, source)| source),

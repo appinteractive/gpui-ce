@@ -1,4 +1,6 @@
-use gpui::{Bounds, ContentMask, Corners, Edges, ScaledPixels, point, size};
+use gpui::{
+    BackdropColorConversion, Bounds, ContentMask, Corners, Edges, ScaledPixels, point, size,
+};
 use gpui_render::shaders::interface as shader_interface;
 use gpui_render::{
     blur::{
@@ -182,6 +184,48 @@ impl WgpuRenderer {
             uniforms,
             wgpu::LoadOp::Load,
             None,
+        );
+    }
+
+    /// Converts the colours of `target` under `bounds` (clipped to `content_mask`) in place: a
+    /// copy of the region into the backdrop snapshot texture, then a copy back through the
+    /// conversion. Both passes overwrite (no blending) the same scissor rectangle.
+    pub(super) fn convert_backdrop(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        bounds: Bounds<ScaledPixels>,
+        content_mask: ContentMask<ScaledPixels>,
+        conversion: BackdropColorConversion,
+    ) {
+        let (width, height) = (self.target.width(), self.target.height());
+        let scissor = ScissorRectangle::for_region(bounds, content_mask.bounds, width, height);
+        if scissor.is_empty() {
+            return;
+        }
+        let Some(scratch) = self.resources().backdrop_snapshot_view.clone() else {
+            return;
+        };
+        let full_size = [width as f32, height as f32];
+        self.draw_filter_pass(
+            encoder,
+            "backdrop_conversion_copy",
+            &self.resources().pipelines.blur_downsample,
+            &scratch,
+            target,
+            BlurUniforms::copy(full_size),
+            wgpu::LoadOp::Load,
+            Some(scissor),
+        );
+        self.draw_filter_pass(
+            encoder,
+            "backdrop_conversion",
+            &self.resources().pipelines.blur_downsample,
+            target,
+            &scratch,
+            BlurUniforms::color_conversion(full_size, conversion),
+            wgpu::LoadOp::Load,
+            Some(scissor),
         );
     }
 
