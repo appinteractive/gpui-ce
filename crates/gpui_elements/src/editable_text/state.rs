@@ -1177,6 +1177,22 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         _w: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
+        // At the start of a line there is nothing between the line start and the caret. macOS (NSTextView
+        // `deleteToBeginningOfLine:`) then deletes the line break before the caret, joining the line with the one
+        // above, so a second Cmd-Backspace clears that line.
+        if self.selected_byte_range().is_empty() {
+            let caret = self.caret_selection().caret.index;
+            let to_line_start = self
+                .deletion_range_from_layout(NavigationDirection::Back, TextBoundary::HardLine)
+                .unwrap_or_else(|| {
+                    self.storage
+                        .range_from_caret(caret, NavigationDirection::Back, TextBoundary::HardLine)
+                });
+            if to_line_start.is_empty() {
+                self.delete_linear(NavigationDirection::Back, TextBoundary::Cluster, cx);
+                return;
+            }
+        }
         self.delete_linear(NavigationDirection::Back, TextBoundary::HardLine, cx);
     }
 
@@ -2082,6 +2098,20 @@ mod tests {
                 "hello world",
                 0.into(),
                 "hello world",
+                None,
+            ),
+            (
+                TestDeletion::LineStart,
+                "line1\n\nline3",
+                6.into(),
+                "line1\nline3",
+                Some(CaretPosition::attached_to_previous_cluster(5)),
+            ),
+            (
+                TestDeletion::LineStart,
+                "line1\nline2",
+                6.into(),
+                "line1line2",
                 None,
             ),
             (
