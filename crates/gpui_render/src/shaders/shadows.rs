@@ -232,10 +232,13 @@ pub mod shadow {
             input.position.xy(),
             PreparedPaint::new(input.paint_solid, input.paint_color0, input.paint_color1),
         );
-        blend_color(
-            color,
-            shadow_coverage(shadow, input.position.xy())
-                * ContentMask::alpha(shadow.content_mask, input.position.xy()),
+        coverage_dither(
+            blend_color(
+                color,
+                shadow_coverage(shadow, input.position.xy())
+                    * ContentMask::alpha(shadow.content_mask, input.position.xy()),
+            ),
+            input.position.xy(),
         )
     }
 
@@ -336,9 +339,12 @@ pub mod shadow {
             input.position.xy(),
             PreparedPaint::new(input.paint_solid, input.paint_color0, input.paint_color1),
         );
-        blend_color(
-            color,
-            coverage * ContentMask::alpha(shadow.content_mask, input.position.xy()),
+        coverage_dither(
+            blend_color(
+                color,
+                coverage * ContentMask::alpha(shadow.content_mask, input.position.xy()),
+            ),
+            input.position.xy(),
         )
     }
 }

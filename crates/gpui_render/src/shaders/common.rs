@@ -613,6 +613,51 @@ mod source {
         )
     }
 
+    /// One 8-bit step of the swapchain (Bgra8Unorm holding sRGB-encoded values).
+    pub const DITHER_STEP: f32 = 1.0 / PATTERN_COMPONENT_SCALE;
+
+    /// 8x8 Bayer threshold of the framebuffer pixel at `position`, in (0, 1): (index + 1/2) / 64.
+    pub fn ordered_dither(position: Vec2f) -> f32 {
+        let x = (position.x as u32) & 7u32;
+        let y = (position.y as u32) & 7u32;
+        let v = x ^ y;
+        let index = ((v & 1u32) << 5u32)
+            | ((y & 1u32) << 4u32)
+            | ((v & 2u32) << 2u32)
+            | ((y & 2u32) << 1u32)
+            | ((v & 4u32) >> 1u32)
+            | ((y & 4u32) >> 2u32);
+        (index as f32 + 0.5) / 64.0
+    }
+
+    /// A shadow's blend input with one step of ordered dither in the blend's colour term, so the blended result has
+    /// no bands whatever lies below (alpha noise would be scaled by the destination). Premultiplied output: rgb is
+    /// the term. Straight alpha (macOS windows): the blend multiplies rgb by alpha, so rgb moves by step / alpha.
+    /// Centred as far as the colour allows (a black shadow can only lighten, 1/2 step on average), faded out below
+    /// one step of alpha. Flat colours are unaffected: the blended value stays within 1/2 step of an exact code.
+    pub fn coverage_dither_with(color: Vec4f, position: Vec2f, premultiplied: ShaderBool) -> Vec4f {
+        let alpha = color.w;
+        let fade = saturate(alpha * PATTERN_COMPONENT_SCALE);
+        if fade <= 0.0 {
+            return color;
+        }
+        let weight = select(alpha, 1.0, is_enabled(premultiplied));
+        let term = color.xyz() * weight;
+        let down = min(0.5 * DITHER_STEP, min(term.x, min(term.y, term.z)));
+        let delta = (ordered_dither(position) * DITHER_STEP - down) * fade / weight;
+        let limit = select(1.0, alpha, is_enabled(premultiplied));
+        let rgb = min(
+            color.xyz() + vec3f(delta, delta, delta),
+            vec3f(limit, limit, limit),
+        );
+        vec4f(rgb.x, rgb.y, rgb.z, alpha)
+    }
+
+    /// `coverage_dither_with` in the window's alpha mode.
+    pub fn coverage_dither(color: Vec4f, position: Vec2f) -> Vec4f {
+        coverage_dither_with(color, position, get!(GLOBALS).premultiplied_alpha)
+    }
+
     #[derive(Clone, Copy, Wgsl)]
     pub struct Paint {
         pub background: Background,

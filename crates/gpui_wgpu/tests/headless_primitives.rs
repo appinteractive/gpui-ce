@@ -1119,3 +1119,106 @@ fn backdrop_conversion_reaches_display_p3_and_back() {
         "the dark window colour in Display P3"
     );
 }
+
+/// Longest run of consecutive x whose 8x8 window sum of R+G+B is equal. Banded ramps give long runs;
+/// a dithered ramp changes the sum nearly every pixel.
+fn longest_plateau(
+    image: &image::RgbaImage,
+    rows: std::ops::Range<u32>,
+    xs: std::ops::Range<u32>,
+) -> u32 {
+    let mut longest = 0;
+    let mut run = 0;
+    let mut previous = None;
+    for x in xs.start..xs.end - 8 {
+        let mut sum = 0u32;
+        for y in rows.start..rows.start + 8 {
+            for dx in 0..8 {
+                let [r, g, b, _] = image.get_pixel(x + dx, y).0;
+                sum += u32::from(r) + u32::from(g) + u32::from(b);
+            }
+        }
+        run = if previous == Some(sum) { run + 1 } else { 1 };
+        previous = Some(sum);
+        longest = longest.max(run);
+    }
+    longest
+}
+
+fn blurred_shadow_image(renderer: &mut WgpuHeadlessRenderer) -> image::RgbaImage {
+    let target = Size {
+        width: DevicePixels(420),
+        height: DevicePixels(300),
+    };
+    let mut scene = Scene::default();
+    scene.insert_primitive(Quad {
+        order: 0,
+        bounds: bounds(0.0, 0.0, 420.0, 300.0),
+        content_mask: mask(420.0, 300.0),
+        background: solid_background(gpui::rgb_to_hsla(gpui::rgb(0x1b1c1f))),
+        ..Default::default()
+    });
+    let shadow_bounds = bounds(40.0, 40.0, 120.0, 220.0);
+    scene.insert_primitive(Shadow {
+        order: 1,
+        blur_radius: ScaledPixels(32.0),
+        bounds: shadow_bounds,
+        corner_radii: Default::default(),
+        content_mask: mask(420.0, 300.0),
+        color: gpui::hsla(0.0, 0.0, 0.0, 0.5).into(),
+        element_bounds: shadow_bounds,
+        element_corner_radii: Default::default(),
+        inset: ShaderBool::Disabled,
+        corner_smoothing: 0.0,
+    });
+    scene.finish();
+    renderer
+        .render_scene_to_image(&scene, target)
+        .expect("shadow frame")
+}
+
+/// A dark blurred shadow ramps over ~27 codes; with 8-bit output that bands unless the shader dithers it.
+/// The headless target is opaque, which is the straight-alpha path of the macOS window.
+#[test]
+fn blurred_shadow_has_no_bands() {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let image = blurred_shadow_image(&mut renderer);
+    if let Ok(dir) = std::env::var("GPUI_DITHER_PPM_DIR") {
+        // The image crate here has no PNG encoder; write a binary PPM (convert it with any image tool).
+        let mut ppm = format!("P6\n{} {}\n255\n", image.width(), image.height()).into_bytes();
+        ppm.extend(
+            image
+                .pixels()
+                .flat_map(|pixel| [pixel.0[0], pixel.0[1], pixel.0[2]]),
+        );
+        std::fs::write(std::path::Path::new(&dir).join("gpui-shadow.ppm"), ppm).expect("save ppm");
+    }
+
+    let (rows, xs) = (146..154, 164..256);
+    let mean = |range: std::ops::Range<u32>| -> f32 {
+        let mut sum = 0.0;
+        let mut count = 0.0;
+        for x in range {
+            for y in rows.clone() {
+                sum += f32::from(image.get_pixel(x, y).0[0]);
+                count += 1.0;
+            }
+        }
+        sum / count
+    };
+    // The shadow darkens toward the box and the strip starts at the panel background.
+    assert!(
+        mean(164..172) < mean(248..256),
+        "the ramp darkens toward the box"
+    );
+    let plateau = longest_plateau(&image, rows, xs);
+    eprintln!("shadow plateau: {plateau}");
+    assert!(plateau <= 8, "shadow bands: longest equal run {plateau} px");
+
+    let again = blurred_shadow_image(&mut renderer);
+    assert_eq!(
+        image.as_raw(),
+        again.as_raw(),
+        "the dither is deterministic"
+    );
+}
