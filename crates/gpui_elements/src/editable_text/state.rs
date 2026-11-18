@@ -441,6 +441,16 @@ impl EditableTextState {
             .unwrap_or_else(|closest| closest)
     }
 
+    /// The line height the text was laid out with. The platform asks for IME bounds outside paint, when the window's
+    /// text style is the default one, so `window.line_height()` would place line 2 and later too low.
+    fn ime_line_height(&self, window: &Window) -> Pixels {
+        if self.layout_data.line_height > Pixels::ZERO {
+            self.layout_data.line_height
+        } else {
+            window.line_height()
+        }
+    }
+
     fn index_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> usize {
         self.caret_for_pixel_point(point, line_height).index
     }
@@ -1078,7 +1088,7 @@ impl EntityInputHandler for EditableTextState {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let range = self.storage.utf_range_16to8(&range_utf16);
-        let line_height = window.line_height();
+        let line_height = self.ime_line_height(window);
 
         let document = self.current_document().ok()?;
         let document_origin = bounds.origin + self.layout_data.document_offset
@@ -1113,7 +1123,7 @@ impl EntityInputHandler for EditableTextState {
     ) -> Option<usize> {
         let point =
             point + self.layout_data.scroll_bounds.origin - self.layout_data.document_offset;
-        let index = self.index_for_pixel_point(point, window.line_height());
+        let index = self.index_for_pixel_point(point, self.ime_line_height(window));
         Some(self.storage.utf_offset_8to16(index))
     }
 }
@@ -1660,6 +1670,29 @@ mod tests {
             .history()
             .map(|history| history.has_next(kind))
             .unwrap_or_default()
+    }
+
+    #[gpui::test]
+    fn ime_bounds_use_the_layout_line_height(cx: &mut TestAppContext) {
+        let text = "1\n2\n3\n4\n5\n6\n7\n8";
+        let view = create_test_input(cx, text, 0);
+        let line_8 = text.rfind('8').unwrap();
+        update_movement_input(view, cx, |input, window, cx| {
+            input.layout_data.document = Some(movement_document(text, None));
+            input.layout_data.line_height = px(24.);
+            input.layout_data.state.last_seen_storage_version = input.version();
+            // The window's own line height differs from the layout's, as when the platform asks outside paint.
+            assert_ne!(window.line_height(), px(24.));
+            let at = input.storage.utf_offset_8to16(line_8);
+            let bounds = input
+                .bounds_for_range(at..at, Bounds::default(), window, cx)
+                .unwrap();
+            assert_eq!(bounds.origin.y, px(24.) * 7.);
+            assert_eq!(bounds.size.height, px(24.));
+            let point = point(bounds.origin.x + px(1.), bounds.origin.y + px(12.));
+            let index = input.character_index_for_point(point, window, cx).unwrap();
+            assert_eq!(index, at);
+        });
     }
 
     #[gpui::test]
