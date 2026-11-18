@@ -239,6 +239,7 @@ pub mod shadow {
                     * ContentMask::alpha(shadow.content_mask, input.position.xy()),
             ),
             input.position.xy(),
+            color.w,
         )
     }
 
@@ -345,6 +346,7 @@ pub mod shadow {
                 coverage * ContentMask::alpha(shadow.content_mask, input.position.xy()),
             ),
             input.position.xy(),
+            color.w,
         )
     }
 }

@@ -370,6 +370,105 @@ fn coverage_dither_leaves_a_coloured_flat_blend_on_its_code() {
 }
 
 #[test]
+fn coverage_dither_centres_each_channel_on_its_own_colour() {
+    use common::*;
+    use wgsl_rs::std::*;
+
+    // Straight alpha, a saturated red shadow: the red term (0.9 * 0.5) has room to go down by 1/2 step, green and blue
+    // (term 0) do not. One shared `min(1/2 step, min(r, g, b))` gave red the one-sided noise of the black channels.
+    let (alpha, step) = (0.5_f32, DITHER_STEP);
+    let color = vec4f(0.9, 0.0, 0.0, alpha);
+    let (mut red, mut green, mut blue) = (Vec::new(), Vec::new(), Vec::new());
+    for y in 0..8 {
+        for x in 0..8 {
+            let out = coverage_dither_with(
+                color,
+                vec2f(x as f32 + 0.5, y as f32 + 0.5),
+                ShaderBool::Disabled,
+            );
+            assert_eq!(out.w, alpha, "alpha is never touched");
+            // The shift of the blend's colour term (rgb is multiplied by alpha).
+            red.push((out.x - color.x) * alpha);
+            green.push((out.y - color.y) * alpha);
+            blue.push((out.z - color.z) * alpha);
+        }
+    }
+    let mean = |values: &[f32]| values.iter().sum::<f32>() / values.len() as f32;
+    let (lowest, highest) = (
+        red.iter().cloned().fold(f32::MAX, f32::min),
+        red.iter().cloned().fold(f32::MIN, f32::max),
+    );
+    assert!(
+        lowest < -0.4 * step,
+        "red goes down too: {} steps",
+        lowest / step
+    );
+    assert!(
+        highest < 0.5 * step,
+        "red stays centred: {} steps",
+        highest / step
+    );
+    assert!(
+        (mean(&red) / step).abs() < 1e-3,
+        "red noise has no bias: mean {} steps",
+        mean(&red) / step
+    );
+    for channel in [&green, &blue] {
+        assert!(
+            channel.iter().all(|&shift| shift >= 0.0),
+            "a zero term can only lighten"
+        );
+        assert!(
+            mean(channel) > 0.4 * step,
+            "and lightens by 1/2 step on average"
+        );
+    }
+}
+
+#[test]
+fn coverage_dither_keeps_a_flat_interior_exact() {
+    use common::*;
+    use wgsl_rs::std::*;
+
+    // Coverage 1 (alpha == the shadow's flat alpha) and anything within one step of it: bytes stay as they were,
+    // also for colours with a channel below 1/2 step (black, saturated).
+    let flat = 0.5_f32;
+    for mode in [ShaderBool::Enabled, ShaderBool::Disabled] {
+        for rgb in [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.2, 0.0, 0.7)] {
+            let weight = if matches!(mode, ShaderBool::Enabled) {
+                flat
+            } else {
+                1.0
+            };
+            let color = vec4f(rgb.0 * weight, rgb.1 * weight, rgb.2 * weight, flat);
+            for y in 0..8 {
+                for x in 0..8 {
+                    let out = coverage_dither_flat_with(
+                        color,
+                        vec2f(x as f32 + 0.5, y as f32 + 0.5),
+                        mode,
+                        flat,
+                    );
+                    assert_eq!(
+                        (out.x, out.y, out.z, out.w),
+                        (color.x, color.y, color.z, color.w),
+                        "flat interior {rgb:?} changed at ({x}, {y})"
+                    );
+                }
+            }
+        }
+    }
+    // The fade is linear in the distance to the flat alpha: just inside the penumbra the noise is back.
+    let color = vec4f(0.0, 0.0, 0.0, flat - 0.5 * DITHER_STEP);
+    let out = coverage_dither_flat_with(color, vec2f(7.5, 7.5), ShaderBool::Disabled, flat);
+    assert!(out.x > 0.0 && out.x < 0.5 * DITHER_STEP / (flat - 0.5 * DITHER_STEP) + 1e-6);
+    // An opaque flat shadow (alpha 1) keeps its black exactly too.
+    let opaque = vec4f(0.0, 0.0, 0.0, 1.0);
+    let out = coverage_dither_flat_with(opaque, vec2f(7.5, 7.5), ShaderBool::Disabled, 1.0);
+    assert_eq!((out.x, out.y, out.z), (0.0, 0.0, 0.0));
+}
+
+#[test]
 fn coverage_dither_removes_shadow_bands() {
     use common::*;
     use shadow::*;

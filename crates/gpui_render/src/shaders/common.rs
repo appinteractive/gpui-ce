@@ -633,29 +633,48 @@ mod source {
     /// A shadow's blend input with one step of ordered dither in the blend's colour term, so the blended result has
     /// no bands whatever lies below (alpha noise would be scaled by the destination). Premultiplied output: rgb is
     /// the term. Straight alpha (macOS windows): the blend multiplies rgb by alpha, so rgb moves by step / alpha.
-    /// Centred as far as the colour allows (a black shadow can only lighten, 1/2 step on average), faded out below
-    /// one step of alpha. Flat colours are unaffected: the blended value stays within 1/2 step of an exact code.
-    pub fn coverage_dither_with(color: Vec4f, position: Vec2f, premultiplied: ShaderBool) -> Vec4f {
+    /// Each channel is centred as far as its own colour allows: a term below 1/2 step cannot go down by 1/2 step
+    /// (the output is clamped at zero), so that channel alone gets the one-sided noise (black lightens by 1/2 step on
+    /// average) and a saturated channel next to a dark one stays centred. Faded out below one step of alpha, and
+    /// where the shadow differs from its flat colour `flat_alpha` (coverage 1) by less than one step of alpha: a
+    /// flat interior keeps its exact code. Centred noise on a flat colour that sits on a code stays within 1/2 step.
+    pub fn coverage_dither_flat_with(
+        color: Vec4f,
+        position: Vec2f,
+        premultiplied: ShaderBool,
+        flat_alpha: f32,
+    ) -> Vec4f {
         let alpha = color.w;
-        let fade = saturate(alpha * PATTERN_COMPONENT_SCALE);
+        let fade = saturate(alpha * PATTERN_COMPONENT_SCALE)
+            * saturate((flat_alpha - alpha) * PATTERN_COMPONENT_SCALE);
         if fade <= 0.0 {
             return color;
         }
         let weight = select(alpha, 1.0, is_enabled(premultiplied));
         let term = color.xyz() * weight;
-        let down = min(0.5 * DITHER_STEP, min(term.x, min(term.y, term.z)));
-        let delta = (ordered_dither(position) * DITHER_STEP - down) * fade / weight;
+        let half_step = 0.5 * DITHER_STEP;
+        let noise = ordered_dither(position) * DITHER_STEP;
+        let scale = fade / weight;
         let limit = select(1.0, alpha, is_enabled(premultiplied));
-        let rgb = min(
-            color.xyz() + vec3f(delta, delta, delta),
-            vec3f(limit, limit, limit),
-        );
-        vec4f(rgb.x, rgb.y, rgb.z, alpha)
+        let r = min(color.x + (noise - min(half_step, term.x)) * scale, limit);
+        let g = min(color.y + (noise - min(half_step, term.y)) * scale, limit);
+        let b = min(color.z + (noise - min(half_step, term.z)) * scale, limit);
+        vec4f(r, g, b, alpha)
     }
 
-    /// `coverage_dither_with` in the window's alpha mode.
-    pub fn coverage_dither(color: Vec4f, position: Vec2f) -> Vec4f {
-        coverage_dither_with(color, position, get!(GLOBALS).premultiplied_alpha)
+    /// `coverage_dither_flat_with` for a shadow that has no flat interior to keep exact.
+    pub fn coverage_dither_with(color: Vec4f, position: Vec2f, premultiplied: ShaderBool) -> Vec4f {
+        coverage_dither_flat_with(color, position, premultiplied, 2.0)
+    }
+
+    /// `coverage_dither_flat_with` in the window's alpha mode.
+    pub fn coverage_dither(color: Vec4f, position: Vec2f, flat_alpha: f32) -> Vec4f {
+        coverage_dither_flat_with(
+            color,
+            position,
+            get!(GLOBALS).premultiplied_alpha,
+            flat_alpha,
+        )
     }
 
     #[derive(Clone, Copy, Wgsl)]
