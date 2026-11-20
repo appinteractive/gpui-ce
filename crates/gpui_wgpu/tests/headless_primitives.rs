@@ -937,6 +937,78 @@ fn row_mask_is_linear_between_samples_and_held_at_the_ends() {
     assert_eq!(&clamped.alphas[..3], &[1.0, 0.0, 1.0]);
 }
 
+#[test]
+fn clipped_backdrop_snapshot_keeps_the_blur_halo_on_an_odd_target() {
+    let mut renderer = WgpuHeadlessRenderer::new().expect("headless renderer");
+    let target = Size {
+        width: DevicePixels(309),
+        height: DevicePixels(101),
+    };
+    let viewport = bounds(0.0, 0.0, 309.0, 101.0);
+    let content_mask = mask(309.0, 101.0);
+    let warm = gpui::rgb_to_hsla(gpui::rgb(0xfe5500));
+    let cool = gpui::rgb_to_hsla(gpui::rgb(0x1856fa));
+
+    let mut render = |isolated| {
+        let mut scene = Scene::default();
+        for column in 0..=61 {
+            scene.insert_primitive(Quad {
+                bounds: bounds(column as f32 * 5.0, 0.0, 5.0, 101.0),
+                content_mask,
+                background: solid_background(if column % 3 == 0 { warm } else { cool }),
+                ..Default::default()
+            });
+        }
+        let start = FilterBoundary {
+            order: 0,
+            bounds: viewport,
+            content_mask,
+            corner_radii: Corners::default(),
+            corner_smoothing: 0.0,
+            filters: smallvec![],
+            opacity: 1.0,
+            is_start: true,
+        };
+        if isolated {
+            scene.insert_primitive(start.clone());
+        }
+        scene.insert_primitive(BackdropFilter {
+            bounds: bounds(81.0, 79.0, 151.0, 22.0),
+            content_mask,
+            filters: smallvec![ScaledFilter::Blur(ScaledPixels(17.0))],
+            opacity: 1.0,
+            row_mask: BackdropRowMask::new(
+                ScaledPixels(79.0),
+                ScaledPixels(10.0),
+                &[1.0, 0.75, 0.25],
+            )
+            .map(|mask| mask.premultiplied()),
+            ..Default::default()
+        });
+        if isolated {
+            scene.insert_primitive(FilterBoundary {
+                is_start: false,
+                ..start
+            });
+        }
+        scene.finish();
+        renderer
+            .render_scene_to_image(&scene, target)
+            .expect("backdrop renders")
+    };
+
+    let direct = render(false);
+    let isolated = render(true);
+    let worst = direct
+        .as_raw()
+        .iter()
+        .zip(isolated.as_raw())
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap();
+    assert!(worst <= 2, "isolated backdrop differs by {worst} levels");
+}
+
 /// Two-pixel row stripes, one per half-resolution texel row, under a near-identity backdrop blur
 /// that composites with `row_mask`. Returns the red channel of column 100 for every row.
 fn row_striped_backdrop_column(row_mask: Option<BackdropRowMask>) -> Vec<f32> {
