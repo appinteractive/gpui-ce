@@ -219,6 +219,26 @@ impl ScissorRectangle {
         }
     }
 
+    /// Full-resolution source texels sampled by this half-resolution scissor.
+    ///
+    /// The downsample shader maps texel centers through normalized coordinates,
+    /// so odd dimensions cannot be mapped by doubling. Include one extra texel
+    /// on each side for the linear sampler and clamp to the target.
+    pub fn downsample_source_region(self, full_width: u32, full_height: u32) -> Self {
+        if self.is_empty() {
+            return Self {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            };
+        }
+
+        let (x, width) = downsample_source_axis(self.x, self.width, full_width);
+        let (y, height) = downsample_source_axis(self.y, self.height, full_height);
+        Self { x, y, width, height }
+    }
+
     /// The whole device pixels of `bounds` clipped to `clip`, each edge rounded to the nearest
     /// pixel boundary and kept inside the target. Two calls with the same arguments give the
     /// same pixels, which a pair of in-place colour conversions relies on.
@@ -252,6 +272,16 @@ impl ScissorRectangle {
     pub fn is_empty(self) -> bool {
         self.width == 0 || self.height == 0
     }
+}
+
+fn downsample_source_axis(start: u32, length: u32, full: u32) -> (u32, u32) {
+    let half = u64::from(downsampled_dimension(full));
+    let full = u64::from(full);
+    let start = u64::from(start).min(half);
+    let end = (start + u64::from(length)).min(half);
+    let min = (start * full / half).saturating_sub(1).min(full);
+    let max = ((end * full).div_ceil(half) + 1).min(full);
+    (min as u32, (max - min) as u32)
 }
 
 #[derive(Clone, Copy)]
@@ -370,6 +400,36 @@ mod tests {
             size(ScaledPixels(5.0), ScaledPixels(5.0)),
         );
         assert!(ScissorRectangle::for_region(outside, clip, 32, 64).is_empty());
+    }
+
+    #[test]
+    fn snapshot_region_covers_linear_downsample_taps() {
+        use super::ScissorRectangle;
+
+        for full in 1..=65 {
+            let half = downsampled_dimension(full);
+            for start in 0..half {
+                for end in start + 1..=half {
+                    let region = ScissorRectangle {
+                        x: start,
+                        y: start,
+                        width: end - start,
+                        height: end - start,
+                    }
+                    .downsample_source_region(full, full);
+                    assert_eq!((region.x, region.width), (region.y, region.height));
+                    assert!(region.x + region.width <= full);
+                    for pixel in [start, end - 1] {
+                        let texel = (f64::from(pixel) + 0.5) * f64::from(full)
+                            / f64::from(half)
+                            - 0.5;
+                        let low = texel.floor().max(0.0) as u32;
+                        let high = (low + 1).min(full - 1);
+                        assert!(region.x <= low && high < region.x + region.width);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

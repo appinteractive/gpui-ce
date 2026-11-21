@@ -83,13 +83,7 @@ impl WgpuRenderer {
             downsampled_dimension(full_width) as f32,
             downsampled_dimension(full_height) as f32,
         ];
-        let dilation = GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS * parameters.blur_radius;
-        let scissor = ScissorRectangle::for_blurred_bounds(
-            parameters.bounds,
-            dilation,
-            full_width,
-            full_height,
-        );
+        let scissor = self.blur_scissor(parameters.bounds, parameters.blur_radius);
         if scissor.is_empty() {
             return;
         }
@@ -229,10 +223,21 @@ impl WgpuRenderer {
         );
     }
 
+    fn blur_scissor(&self, bounds: Bounds<ScaledPixels>, radius: f32) -> ScissorRectangle {
+        ScissorRectangle::for_blurred_bounds(
+            bounds,
+            GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS * radius,
+            self.target.width(),
+            self.target.height(),
+        )
+    }
+
     pub(super) fn snapshot_backdrop<'a>(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         sources: impl Iterator<Item = &'a wgpu::TextureView>,
+        filter_bounds: Bounds<ScaledPixels>,
+        blur_radius: f32,
     ) -> wgpu::TextureView {
         let target = self
             .resources()
@@ -240,10 +245,21 @@ impl WgpuRenderer {
             .as_ref()
             .expect("backdrop snapshot was prepared")
             .clone();
-        let full_size = [self.target.width() as f32, self.target.height() as f32];
+        let full_width = self.target.width();
+        let full_height = self.target.height();
+        let full_size = [full_width as f32, full_height as f32];
+        let region = self
+            .blur_scissor(filter_bounds, blur_radius)
+            .downsample_source_region(full_width, full_height);
+        if region.is_empty() {
+            return target;
+        }
         let bounds = Bounds::new(
-            point(ScaledPixels(0.0), ScaledPixels(0.0)),
-            size(ScaledPixels(full_size[0]), ScaledPixels(full_size[1])),
+            point(ScaledPixels(region.x as f32), ScaledPixels(region.y as f32)),
+            size(
+                ScaledPixels(region.width as f32),
+                ScaledPixels(region.height as f32),
+            ),
         );
         drop(begin_color_render_pass(
             encoder,

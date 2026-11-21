@@ -433,10 +433,13 @@ impl<'a> FrameEncoder<'a> {
                             );
                             continue;
                         }
+                        let blur_radius = filter.max_blur_radius();
                         let snapshot = self.targets.inherits_backdrop().then(|| {
                             self.renderer.snapshot_backdrop(
                                 &mut self.encoder,
                                 self.targets.backdrop_layers(),
+                                filter.bounds,
+                                blur_radius,
                             )
                         });
                         let source = snapshot.as_ref().unwrap_or_else(|| self.targets.current());
@@ -450,7 +453,7 @@ impl<'a> FrameEncoder<'a> {
                                 content_mask: filter.content_mask,
                                 corner_radii: filter.corner_radii,
                                 corner_smoothing: filter.corner_smoothing,
-                                blur_radius: filter.max_blur_radius(),
+                                blur_radius,
                                 opacity: filter.opacity,
                                 saturation,
                                 brightness,
